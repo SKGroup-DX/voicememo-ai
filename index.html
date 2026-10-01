@@ -397,32 +397,9 @@ const C = {
   purple: "#AF52DE"
 };
 
-// ── SYSTEM PROMPT（面談専用）───────────────────────────
-const SYSTEM_PROMPT = `面談記録として重要な情報を構造化して抽出し、加えて面談の質を分析してください。
-
-【出力形式】
-{
-  "sections":[
-    {"key":"goal","label":"今日のゴール","emoji":"🎯","items":["..."]},
-    {"key":"voice","label":"本人の声","emoji":"💬","items":["..."]},
-    {"key":"action","label":"アクション","emoji":"✅","items":["..."]},
-    {"key":"follow","label":"フォロー事項","emoji":"📅","items":["..."]}
-  ],
-  "analysis":{
-    "speakingRatio":{"self":<面談担当者の発話割合(数値0-100)>,"other":<相手の発話割合(数値0-100)>},
-    "listeningScore":<傾聴度スコア(数値0-100)>,
-    "listeningComment":"<傾聴度についての一言コメント（30文字程度）>",
-    "openQuestionRatio":<オープンクエスチョンの割合(数値0-100)>
-  }
-}
-
-【sections】各2〜4項目。情報がない場合は["特になし"]
-
-【analysis】
-- speakingRatio: 面談担当者（進行する側）と相手（面談される側）の発話量の割合。self+other=100になるようにしてください。
-- listeningScore: 相手の発言を受けて深掘りする質問ができているか、話を遮っていないか等から算出。
-- openQuestionRatio: 「はい/いいえ」で終わる質問ではなく、「なぜ」「どう思う」等の深掘りする質問の割合。
-- 文字起こしのみからの推定であることを前提に、妥当な数値を出してください。`;
+// 面談向けの要約プロンプトはGAS側（getDefaultSystemPrompt）に一本化した。
+// 録音・送信はAppleショートカット経由で行われ、クライアントからsystemPromptを
+// 渡す経路がなくなったため。
 
 // ── UTILS ───────────────────────────────────────────────
 function timeoutError(msg) {
@@ -479,70 +456,6 @@ async function gasPost(b, timeoutMs = 30000) {
   return json;
 }
 
-// ── 未処理録音の永続化（IndexedDB）─────────────────────
-// transcribe失敗・アプリ再起動をまたいでも録音本体を失わないための保険。
-// 文字起こし成功時に該当エントリを削除する。
-const IDB_NAME = "vm_pending_audio";
-const IDB_STORE = "recordings";
-function idbOpen() {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(IDB_NAME, 1);
-    req.onupgradeneeded = () => {
-      req.result.createObjectStore(IDB_STORE, {
-        keyPath: "localId"
-      });
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-async function idbPut(rec) {
-  try {
-    const db = await idbOpen();
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction(IDB_STORE, "readwrite");
-      tx.objectStore(IDB_STORE).put(rec);
-      tx.oncomplete = resolve;
-      tx.onerror = () => reject(tx.error);
-    });
-  } catch (e) {
-    console.warn("[IDB] 保存失敗:", e.message);
-  }
-}
-async function idbDelete(localId) {
-  try {
-    const db = await idbOpen();
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction(IDB_STORE, "readwrite");
-      tx.objectStore(IDB_STORE).delete(localId);
-      tx.oncomplete = resolve;
-      tx.onerror = () => reject(tx.error);
-    });
-  } catch (e) {
-    console.warn("[IDB] 削除失敗:", e.message);
-  }
-}
-async function idbGetAll() {
-  try {
-    const db = await idbOpen();
-    return await new Promise((resolve, reject) => {
-      const tx = db.transaction(IDB_STORE, "readonly");
-      const req = tx.objectStore(IDB_STORE).getAll();
-      req.onsuccess = () => resolve(req.result || []);
-      req.onerror = () => reject(req.error);
-    });
-  } catch (e) {
-    console.warn("[IDB] 読込失敗:", e.message);
-    return [];
-  }
-}
-function fmt(s) {
-  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
-}
-function nowStr() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
-}
 function normalizeSections(s) {
   // GAS/Sheets経由で読み込んだ記録は、sectionsがJSON文字列のまま返ってくることがある
   // （保存時にJSON.stringifyしたセル値をそのまま返している場合）。
@@ -609,32 +522,6 @@ function lsSetUser(u) {
 function lsClearAuth() {
   localStorage.removeItem(AUTH_KEY);
   localStorage.removeItem("vm_user");
-}
-function lsGetSuggestions() {
-  try {
-    return JSON.parse(localStorage.getItem("vm_sugg") || "[]");
-  } catch {
-    return [];
-  }
-}
-function lsSaveSuggestion(n) {
-  if (!n) return;
-  try {
-    const l = [n, ...lsGetSuggestions().filter(s => s !== n)].slice(0, 20);
-    localStorage.setItem("vm_sugg", JSON.stringify(l));
-  } catch {}
-}
-function lsGetAuto() {
-  try {
-    return localStorage.getItem("vm_auto") === "1";
-  } catch {
-    return false;
-  }
-}
-function lsSetAuto(v) {
-  try {
-    localStorage.setItem("vm_auto", v ? "1" : "0");
-  } catch {}
 }
 
 // ── ICON ────────────────────────────────────────────────
@@ -811,7 +698,6 @@ function Drawer({
   onClose,
   onNav,
   onLogout,
-  isRecording,
   userName
 }) {
   return /*#__PURE__*/React.createElement(React.Fragment, null, open && /*#__PURE__*/React.createElement("div", {
@@ -862,8 +748,8 @@ function Drawer({
     }
   }, [{
     key: "home",
-    icon: "microphone",
-    label: "新規録音"
+    icon: "house",
+    label: "ホーム"
   }, {
     key: "history",
     icon: "clock-rotate-left",
@@ -871,10 +757,6 @@ function Drawer({
   }].map(item => /*#__PURE__*/React.createElement("button", {
     key: item.key,
     onClick: () => {
-      if (isRecording) {
-        alert("録音を停止してから移動してください。");
-        return;
-      }
       onNav(item.key);
       onClose();
     },
@@ -937,260 +819,6 @@ function Drawer({
       color: C.text2
     }
   }, "ログアウト")))));
-}
-
-// ── WAVEFORM ─────────────────────────────────────────────
-function Waveform({
-  stream,
-  paused
-}) {
-  const cvRef = useRef(null),
-    rafRef = useRef(null);
-  useEffect(() => {
-    if (!stream) return;
-    const ac = new (window.AudioContext || window.webkitAudioContext)();
-    const an = ac.createAnalyser();
-    an.fftSize = 256;
-    ac.createMediaStreamSource(stream).connect(an);
-    const cv = cvRef.current,
-      cx = cv.getContext("2d"),
-      dt = new Uint8Array(an.frequencyBinCount);
-    const draw = () => {
-      rafRef.current = requestAnimationFrame(draw);
-      an.getByteFrequencyData(dt);
-      const W = cv.width,
-        H = cv.height;
-      cx.clearRect(0, 0, W, H);
-      const bw = 3,
-        gap = 2,
-        tot = bw + gap,
-        cnt = Math.floor(W / tot),
-        step = Math.floor(dt.length / cnt);
-      for (let i = 0; i < cnt; i++) {
-        const v = dt[i * step] / 255,
-          h = Math.max(3, v * H * .85);
-        cx.fillStyle = paused ? `rgba(142,142,147,${.4 + v * .3})` : `rgba(255,59,48,${.5 + v * .5})`;
-        const y = (H - h) / 2;
-        cx.beginPath();
-        if (cx.roundRect) cx.roundRect(i * tot, y, bw, h, 1.5);else cx.rect(i * tot, y, bw, h);
-        cx.fill();
-      }
-    };
-    draw();
-    return () => {
-      cancelAnimationFrame(rafRef.current);
-      ac.close();
-    };
-  }, [stream]);
-  return /*#__PURE__*/React.createElement("canvas", {
-    ref: cvRef,
-    width: 300,
-    height: 40,
-    style: {
-      width: "100%",
-      maxWidth: 300,
-      height: 40,
-      display: "block",
-      margin: "0 auto"
-    }
-  });
-}
-
-// ── AUDIO PLAYER ─────────────────────────────────────────
-function AudioPlayer({
-  url,
-  onDelete
-}) {
-  const [playing, setPlaying] = useState(false);
-  const [cur, setCur] = useState(0);
-  const [dur, setDur] = useState(0);
-  const ref = useRef(null);
-  useEffect(() => {
-    const a = ref.current;
-    if (!a) return;
-    const onTime = () => setCur(a.currentTime);
-    const onMeta = () => setDur(a.duration);
-    const onEnd = () => {
-      setPlaying(false);
-      setCur(0);
-      a.currentTime = 0;
-    };
-    a.addEventListener("timeupdate", onTime);
-    a.addEventListener("loadedmetadata", onMeta);
-    a.addEventListener("ended", onEnd);
-    return () => {
-      a.removeEventListener("timeupdate", onTime);
-      a.removeEventListener("loadedmetadata", onMeta);
-      a.removeEventListener("ended", onEnd);
-    };
-  }, []);
-  const toggle = () => {
-    const a = ref.current;
-    if (playing) {
-      a.pause();
-      setPlaying(false);
-    } else {
-      const p = a.play();
-      if (p && p.then) p.then(() => setPlaying(true)).catch(() => setPlaying(false));else setPlaying(true);
-    }
-  };
-  const skip = s => {
-    const a = ref.current;
-    a.currentTime = Math.min(Math.max(0, a.currentTime + s), a.duration);
-  };
-  return /*#__PURE__*/React.createElement("div", {
-    style: {
-      padding: "10px 14px 8px",
-      borderTop: `1px solid ${C.sep}`
-    }
-  }, /*#__PURE__*/React.createElement("audio", {
-    ref: ref,
-    src: url,
-    preload: "metadata",
-    playsInline: true
-  }), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      justifyContent: "space-between",
-      marginBottom: 6,
-      fontSize: 11,
-      color: C.text2
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontVariantNumeric: "tabular-nums"
-    }
-  }, fmt(cur)), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontVariantNumeric: "tabular-nums"
-    }
-  }, "-", fmt(Math.max(0, dur - cur)))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "relative",
-      marginBottom: 10
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      height: 3,
-      background: C.sep,
-      borderRadius: 4,
-      overflow: "hidden"
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      width: `${dur > 0 ? cur / dur * 100 : 0}%`,
-      height: "100%",
-      background: C.red,
-      borderRadius: 4
-    }
-  })), /*#__PURE__*/React.createElement("input", {
-    type: "range",
-    min: 0,
-    max: dur || 1,
-    step: 0.01,
-    value: cur,
-    onChange: e => {
-      ref.current.currentTime = parseFloat(e.target.value);
-      setCur(parseFloat(e.target.value));
-    },
-    style: {
-      position: "absolute",
-      inset: 0,
-      opacity: 0,
-      width: "100%",
-      cursor: "pointer"
-    }
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
-      padding: "0 4px"
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      width: 36,
-      height: 36
-    }
-  }), /*#__PURE__*/React.createElement("button", {
-    onClick: () => skip(-15),
-    style: {
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "center",
-      gap: 1,
-      background: "none",
-      border: "none",
-      cursor: "pointer"
-    }
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: "rotate-left",
-    size: 22,
-    color: C.text
-  }), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 9,
-      color: C.text2
-    }
-  }, "15")), /*#__PURE__*/React.createElement("button", {
-    onClick: toggle,
-    style: {
-      width: 52,
-      height: 52,
-      borderRadius: "50%",
-      background: C.text,
-      border: "none",
-      cursor: "pointer",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      boxShadow: "0 2px 8px rgba(0,0,0,.2)"
-    }
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: playing ? "pause" : "play",
-    size: 22,
-    color: "#fff",
-    style: playing ? {} : {
-      marginLeft: 2
-    }
-  })), /*#__PURE__*/React.createElement("button", {
-    onClick: () => skip(15),
-    style: {
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "center",
-      gap: 1,
-      background: "none",
-      border: "none",
-      cursor: "pointer"
-    }
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: "rotate-right",
-    size: 22,
-    color: C.text
-  }), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 9,
-      color: C.text2
-    }
-  }, "15")), /*#__PURE__*/React.createElement("button", {
-    onClick: onDelete,
-    style: {
-      width: 36,
-      height: 36,
-      borderRadius: "50%",
-      background: `${C.red}15`,
-      border: "none",
-      cursor: "pointer",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center"
-    }
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: "trash",
-    size: 14,
-    color: C.red
-  }))));
 }
 
 // ── SUMMARY MODAL ─────────────────────────────────────────
@@ -1675,97 +1303,12 @@ function SummaryModal({
 }
 
 // ── HOME SCREEN ───────────────────────────────────────────
-function HomeScreen({
-  member,
-  interviewee,
-  setInterviewee,
-  isOnline,
-  onRecordSaved,
-  onRecordingChange,
-  currentUser
-}) {
-  const [recState, setRecState] = useState("idle");
-  const [timer, setTimer] = useState(0);
-  const [longRecWarned, setLongRecWarned] = useState(false);
-  const [stream, setStream] = useState(null);
-  const [recs, setRecs] = useState([]);
-  const [processingId, setProcessingId] = useState(null);
+// ホーム画面。録音はiPhone純正の「ボイスメモ」アプリ＋Appleショートカット経由で
+// 直接GASへ送信される（本アプリのブラウザ内録音機能は撤去済み）。ここでは
+// 直近の記録を確認できるだけのシンプルな画面にしている。
+function HomeScreen({ member }) {
   const [selectedRec, setSelectedRec] = useState(null);
-  const [confirmDel, setConfirmDel] = useState(null);
-  const [error, setError] = useState(null);
-  const [autoProcess, setAutoProcess] = useState(() => lsGetAuto());
-  const [suggestions, setSuggestions] = useState(() => lsGetSuggestions());
-  const [showSugg, setShowSugg] = useState(false);
   const [recentRec, setRecentRec] = useState(null);
-  const mrRef = useRef(null),
-    chunksRef = useRef([]),
-    timerRef = useRef(null);
-  const processingRef = useRef(new Set());
-  const savedTimer = useRef(0),
-    savedDate = useRef("");
-  // 録音を約3分ごとに区切ってアップロードし、録音中に文字起こしを進めておくための状態。
-  // segmentsRef: 確定済みの区切り（{index, blob, mimeType, uploaded}）を録音順に保持。
-  // rotatingRef: 区切りによる再起動なのか、本当の録音停止なのかをonstopに伝えるフラグ。
-  const CHUNK_DURATION_MS = 3 * 60 * 1000;
-  const segmentsRef = useRef([]);
-  const rotatingRef = useRef(false);
-  const chunkIndexRef = useRef(0);
-  const chunkRotationTimerRef = useRef(null);
-  // onstop等のコールバックは録音開始時点のクロージャで固定されるため、録音中に
-  // 変わりうる値（自動要約トグル・相手・メンバー名）はrefで最新値を追えるようにする。
-  const autoProcessRef = useRef(false);
-  const memberRef = useRef("");
-  const intervieweeRef = useRef("");
-  useEffect(() => {
-    autoProcessRef.current = autoProcess;
-  }, [autoProcess]);
-  useEffect(() => {
-    memberRef.current = member;
-  }, [member]);
-  useEffect(() => {
-    intervieweeRef.current = interviewee;
-  }, [interviewee]);
-  const idbRecordFrom = rec => ({
-    localId: rec.localId,
-    segments: rec.segments,
-    chunks: rec.chunks, // 互換: 分割前の旧形式データが残っている場合のみ使う
-    mimeType: rec.mimeType,
-    date: rec.date,
-    duration: rec.duration,
-    member: rec.member,
-    interviewee: rec.interviewee,
-    id: rec.id || null
-  });
-  // 未処理のまま残っている録音（前回transcribe失敗・アプリ再起動等）を復元
-  useEffect(() => {
-    idbGetAll().then(items => {
-      if (!items.length) return;
-      setRecs(prev => {
-        const known = new Set(prev.map(r => r.localId));
-        const restored = items.filter(it => !known.has(it.localId)).map(it => {
-          const hasSegments = Array.isArray(it.segments) && it.segments.length > 0;
-          const blobs = hasSegments ? it.segments.map(sg => sg.blob) : it.chunks || [];
-          return {
-            localId: it.localId,
-            url: URL.createObjectURL(new Blob(blobs, {
-              type: it.mimeType
-            })),
-            date: it.date,
-            duration: it.duration,
-            member: it.member,
-            interviewee: it.interviewee,
-            processed: false,
-            sections: null,
-            id: it.id || null,
-            mimeType: it.mimeType,
-            segments: hasSegments ? it.segments : undefined,
-            chunks: hasSegments ? undefined : it.chunks
-          };
-        });
-        return restored.length ? [...restored, ...prev] : prev;
-      });
-    });
-  }, []);
   useEffect(() => {
     if (!member) return;
     gasGet({
@@ -1780,450 +1323,6 @@ function HomeScreen({
       });
     }).catch(() => {});
   }, [member]);
-  useEffect(() => {
-    if (recState === "recording") timerRef.current = setInterval(() => setTimer(t => t + 1), 1000);else clearInterval(timerRef.current);
-    return () => clearInterval(timerRef.current);
-  }, [recState]);
-  // 長時間録音への簡易警告（分割処理は未実装のため、処理が失敗しやすくなる前に
-  // ユーザー自身に区切ってもらうための注意喚起）。録音を止めることはしない。
-  const LONG_RECORDING_WARN_SEC = 60 * 60;
-  useEffect(() => {
-    if (recState === "recording" && !longRecWarned && timer >= LONG_RECORDING_WARN_SEC) {
-      setLongRecWarned(true);
-    }
-  }, [timer, recState, longRecWarned]);
-  const isActive = recState === "recording" || recState === "paused";
-  const wakeLockRef = useRef(null);
-  const wantWakeLockRef = useRef(false);
-  const requestWakeLock = async () => {
-    try {
-      if (!("wakeLock" in navigator)) {
-        console.warn("[WakeLock] このブラウザ/OSはWake Lock APIに非対応です");
-        return;
-      }
-      wakeLockRef.current = await navigator.wakeLock.request("screen");
-      // OS都合（省電力モード等）で録音継続中に勝手に解放されることがあるため、
-      // その場合はここで検知して再取得を試みる（visibilitychangeだけでは検知できない）。
-      wakeLockRef.current.addEventListener("release", () => {
-        if (wantWakeLockRef.current && document.visibilityState === "visible") {
-          requestWakeLock();
-        }
-      });
-    } catch (e) {
-      console.warn("[WakeLock] 取得失敗:", e.message);
-      setError("画面ロック防止の設定に失敗しました。録音中は画面を触ったままにするか、「設定」アプリの自動ロックを「なし」にすることをおすすめします。");
-    }
-  };
-  const releaseWakeLock = () => {
-    wantWakeLockRef.current = false;
-    try {
-      wakeLockRef.current?.release();
-      wakeLockRef.current = null;
-    } catch {}
-  };
-
-  // 画面が再表示された時にWake Lockを再取得（バックグラウンド復帰対応）
-  useEffect(() => {
-    const onVisChange = () => {
-      if (document.visibilityState === "visible" && recStateRef.current === "recording") {
-        requestWakeLock();
-      }
-    };
-    document.addEventListener("visibilitychange", onVisChange);
-    return () => document.removeEventListener("visibilitychange", onVisChange);
-  }, []);
-  const recStateRef = useRef("idle");
-  useEffect(() => {
-    recStateRef.current = recState;
-  }, [recState]);
-  // 録音の1区切り（segment）をGASにアップロードする。録音中は裏で呼ばれ、
-  // 失敗しても録音自体は継続する（uploaded=falseのままなら停止時に再送する）。
-  const uploadSegment = async (parentId, seg, isLast) => {
-    try {
-      const b64 = await new Promise((res, rej) => {
-        const r = new FileReader();
-        r.onerror = () => rej(new Error("音声データの読み込みに失敗しました"));
-        r.onloadend = () => {
-          if (typeof r.result !== "string") {
-            rej(new Error("音声データの読み込みに失敗しました"));
-            return;
-          }
-          res(r.result.split(",")[1]);
-        };
-        r.readAsDataURL(seg.blob);
-      });
-      const res = await gasPost({
-        action: "submitChunk",
-        parentId,
-        chunkIndex: seg.index,
-        isLast,
-        audio: b64,
-        mimeType: seg.mimeType,
-        member: memberRef.current || "",
-        interviewee: intervieweeRef.current || "",
-        date: savedDate.current,
-        duration: isLast ? fmt(savedTimer.current || timer) : undefined,
-        mode: "interview",
-        systemPrompt: SYSTEM_PROMPT
-      }, 60000);
-      if (res.success) seg.uploaded = true;
-      return res.success;
-    } catch (e) {
-      console.warn("[uploadSegment] 区切り" + seg.index + "の送信に失敗（停止時に再試行されます）:", e.message);
-      return false;
-    }
-  };
-  const startRec = async () => {
-    if (!isOnline) {
-      setError("オフラインです。接続を確認してください。");
-      return;
-    }
-    setError(null);
-    try {
-      const s = await navigator.mediaDevices.getUserMedia({
-        audio: true
-      });
-      const mime = ["audio/mp4", "audio/webm;codecs=opus", "audio/webm", "audio/ogg"].find(t => {
-        try {
-          return MediaRecorder.isTypeSupported(t);
-        } catch {
-          return false;
-        }
-      }) || "";
-      const mrOpts = mime ? {
-        mimeType: mime,
-        audioBitsPerSecond: 32000
-      } : {
-        audioBitsPerSecond: 32000
-      };
-      const parentId = window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : Date.now() + "-" + Math.random().toString(36).slice(2);
-      chunkIndexRef.current = 0;
-      segmentsRef.current = [];
-      rotatingRef.current = false;
-      savedDate.current = nowStr();
-
-      // 3分ごとにMediaRecorderを一度停止→即再開し、独立した区切り（segment）を作る。
-      // 区切りの瞬間に数十〜300ms程度のごく短い音声の欠落が発生するが、これは
-      // MediaRecorderが作るファイルの仕組み上避けられない（最初の断片にしか
-      // ヘッダ情報が入らないため、後から機械的に切り分けることはできない）。
-      const startSegment = () => {
-        const mr = new MediaRecorder(s, mrOpts);
-        chunksRef.current = [];
-        mr.ondataavailable = e => e.data.size > 0 && chunksRef.current.push(e.data);
-        mr.onstop = () => {
-          const actualMime = mr.mimeType || mime || "audio/mp4";
-          const segmentBlob = new Blob(chunksRef.current, {
-            type: actualMime
-          });
-          const wasRotating = rotatingRef.current;
-          const seg = {
-            index: chunkIndexRef.current,
-            blob: segmentBlob,
-            mimeType: actualMime,
-            uploaded: false
-          };
-          segmentsRef.current.push(seg);
-
-          if (wasRotating) {
-            uploadSegment(parentId, seg, false);
-            rotatingRef.current = false;
-            chunkIndexRef.current += 1;
-            startSegment();
-            return;
-          }
-
-          // 録音の本当の終了（区切りによる再起動ではない）
-          s.getTracks().forEach(t => t.stop());
-          setStream(null);
-          releaseWakeLock();
-
-          const allSegments = segmentsRef.current;
-          const combinedUrl = URL.createObjectURL(new Blob(allSegments.map(sg => sg.blob), {
-            type: actualMime
-          }));
-          const localId = Date.now();
-          const newRec = {
-            localId,
-            url: combinedUrl,
-            date: savedDate.current,
-            duration: fmt(savedTimer.current || timer),
-            member: memberRef.current || "",
-            interviewee: intervieweeRef.current || "",
-            processed: false,
-            sections: null,
-            id: parentId,
-            mimeType: actualMime,
-            segments: allSegments
-          };
-          setRecs(prev => [...prev, newRec]);
-          if (intervieweeRef.current) {
-            lsSaveSuggestion(intervieweeRef.current);
-            setSuggestions(lsGetSuggestions());
-          }
-          idbPut(idbRecordFrom(newRec));
-          uploadSegment(parentId, seg, true).then(() => {
-            idbPut(idbRecordFrom(newRec));
-            if (autoProcessRef.current) processRec(newRec);
-          });
-        };
-        mr.start(100);
-        mrRef.current = mr;
-      };
-      startSegment();
-
-      setStream(s);
-      setRecState("recording");
-      setTimer(0);
-      setLongRecWarned(false);
-      savedTimer.current = 0;
-      if (onRecordingChange) onRecordingChange(true);
-      wantWakeLockRef.current = true;
-      await requestWakeLock(); // 画面ロック防止
-
-      clearInterval(chunkRotationTimerRef.current);
-      chunkRotationTimerRef.current = setInterval(() => {
-        if (mrRef.current && mrRef.current.state === "recording") {
-          rotatingRef.current = true;
-          mrRef.current.stop(); // onstopが即座に次の区切りを開始する
-        }
-      }, CHUNK_DURATION_MS);
-    } catch (e) {
-      const msgs = {
-        NotAllowedError: "マイクへのアクセスを許可してください。",
-        NotFoundError: "マイクが見つかりません。デバイスの接続を確認してください。",
-        NotReadableError: "マイクが他のアプリで使用中の可能性があります。他のアプリを閉じてから再度お試しください。",
-        SecurityError: "マイクへのアクセスがブロックされています。ブラウザの設定を確認してください。"
-      };
-      alert(msgs[e?.name] || "マイクを起動できませんでした。しばらくしてから再度お試しください。");
-    }
-  };
-  const stopRec = () => {
-    savedTimer.current = timer;
-    clearInterval(chunkRotationTimerRef.current);
-    // 自動処理する場合はprocessRec側で解放するまでWake Lockを保持する
-    // （ここで解放すると、AI処理待ちの間に画面がロックされ、処理中の通信が
-    // iOS Safariに切断されてしまうことがあるため）。
-    if (!autoProcess) releaseWakeLock();
-    setRecState("stopped");
-    if (onRecordingChange) onRecordingChange(false);
-    // 実際の録音停止・レコード確定・アップロードはMediaRecorderのonstopで行う
-    // （最後の区切りのデータが確定するのを待つ必要があるため）。
-    mrRef.current?.stop();
-  };
-  // GAS側の処理は非同期化されており、transcribeは音声を保存して"queued"を
-  // 返すだけになった。実際のAI処理はGAS側のトリガーで進むため、ここでは
-  // getRecordStatusを定期的にポーリングして完了/失敗を待つ。
-  // （録音が長い・複数人が同時に使うほど、1回の接続を長時間張りっぱなしにする
-  //   従来方式はiOS Safariの通信断やGASの実行時間上限に弱かったための変更）
-  const POLL_INTERVAL_MS = 5000;
-  const POLL_MAX_ATTEMPTS = 192; // 5秒 x 192 = 最大16分待つ（間隔を詰めた分、回数を増やして同じ上限を維持）
-  const processRec = async (rec, force = false) => {
-    if (processingRef.current.has(rec.localId)) return;
-    processingRef.current.add(rec.localId);
-    if (!isOnline) {
-      setError("オフラインです。接続を確認してください。");
-      processingRef.current.delete(rec.localId);
-      return;
-    }
-    setProcessingId(rec.localId);
-    // アップロード〜AI処理の待ち時間も画面ロックを防止する（録音停止時点では
-    // まだ解放していない場合もあるが、手動処理や再取得のケースに備えて確実に取得する）。
-    wantWakeLockRef.current = true;
-    await requestWakeLock();
-    const finish = () => {
-      releaseWakeLock();
-      setProcessingId(null);
-      processingRef.current.delete(rec.localId);
-    };
-    const applyDone = (finalId, sections) => {
-      setRecs(prev => prev.map(r => r.localId === rec.localId ? {
-        ...r,
-        processed: true,
-        sections,
-        id: finalId
-      } : r));
-      idbDelete(rec.localId);
-      // 「最近の記録」カードはmember変更時にしか再取得しないため、成功時は
-      // ここで直接更新しておく（以前はホーム再訪時の強制再マウントに頼っていた）。
-      setRecentRec({
-        id: finalId,
-        date: rec.date,
-        duration: rec.duration,
-        member: rec.member,
-        interviewee: rec.interviewee,
-        sections
-      });
-      if (onRecordSaved) onRecordSaved({
-        id: finalId,
-        date: rec.date,
-        duration: rec.duration,
-        member: rec.member,
-        interviewee: rec.interviewee,
-        mode: "interview",
-        sections
-      });
-    };
-    const pollStatus = async (id, attempt) => {
-      if (!processingRef.current.has(rec.localId)) return; // 途中で削除等された
-      if (attempt > POLL_MAX_ATTEMPTS) {
-        setError("処理状況の確認がタイムアウトしました。履歴を確認してください。");
-        finish();
-        return;
-      }
-      let data;
-      try {
-        data = await gasGet({
-          action: "getRecordStatus",
-          id
-        }, 15000);
-      } catch (e) {
-        // ポーリング自体の一時的な通信失敗はリトライする（致命的エラーにしない）
-        setTimeout(() => pollStatus(id, attempt + 1), POLL_INTERVAL_MS);
-        return;
-      }
-      if (!data.found) {
-        setError("処理中の記録が見つかりませんでした。履歴を確認してください。");
-        finish();
-        return;
-      }
-      if (data.status === "done") {
-        applyDone(id, data.sections);
-        finish();
-        return;
-      }
-      if (data.status === "error") {
-        setError("AI処理に失敗しました: " + (data.error || "不明なエラー"));
-        finish();
-        return;
-      }
-      setTimeout(() => pollStatus(id, attempt + 1), POLL_INTERVAL_MS);
-    };
-    try {
-      if (rec.segments && rec.segments.length) {
-        // 分割録音：まだアップロード確定していない区切りだけ（強制再試行時は
-        // 全部）送り直す。送信自体はgasPost内で3分割ごとの小さな音声なので、
-        // 旧方式にあったファイルサイズ上限チェックはここでは不要。
-        const total = rec.segments.length;
-        for (let i = 0; i < total; i++) {
-          const seg = rec.segments[i];
-          if (!force && seg.uploaded) continue;
-          const b64 = await new Promise((res, rej) => {
-            const r = new FileReader();
-            r.onerror = () => rej(new Error("音声データの読み込みに失敗しました"));
-            r.onloadend = () => {
-              if (typeof r.result !== "string") {
-                rej(new Error("音声データの読み込みに失敗しました"));
-                return;
-              }
-              res(r.result.split(",")[1]);
-            };
-            r.readAsDataURL(seg.blob);
-          });
-          const isLast = i === total - 1;
-          const res = await gasPost({
-            action: "submitChunk",
-            parentId: rec.id,
-            chunkIndex: seg.index,
-            isLast,
-            audio: b64,
-            mimeType: seg.mimeType || rec.mimeType,
-            member: rec.member,
-            interviewee: rec.interviewee,
-            date: rec.date,
-            duration: isLast ? rec.duration : undefined,
-            mode: "interview",
-            systemPrompt: SYSTEM_PROMPT
-          }, 60000);
-          if (!res.success) throw new Error(res.error || "GASエラー");
-          seg.uploaded = true;
-        }
-        idbPut(idbRecordFrom(rec));
-        setTimeout(() => pollStatus(rec.id, 1), 1500);
-        return;
-      }
-
-      // 互換パス：分割前の旧形式（rec.chunks が単一の音声全体）が残っている場合のみ通る
-      const mimeType = rec.mimeType || "audio/mp4";
-      const blob = new Blob(rec.chunks, {
-        type: mimeType
-      });
-      const fileSizeMB = Math.round(blob.size / 1024 / 1024);
-      if (blob.size > 40 * 1024 * 1024) {
-        throw new Error(`音声ファイルが大きすぎます（${fileSizeMB}MB）。録音を分割してお試しください。`);
-      }
-      if (blob.size > 25 * 1024 * 1024) {
-        const ok = window.confirm(`音声ファイルが${fileSizeMB}MBと大きいです。処理に時間がかかる場合があります。続行しますか？`);
-        if (!ok) {
-          finish();
-          return;
-        }
-      }
-      const b64 = await new Promise((res, rej) => {
-        const r = new FileReader();
-        r.onerror = () => rej(new Error("音声データの読み込みに失敗しました"));
-        r.onloadend = () => {
-          if (typeof r.result !== "string") {
-            rej(new Error("音声データの読み込みに失敗しました"));
-            return;
-          }
-          res(r.result.split(",")[1]);
-        };
-        r.readAsDataURL(blob);
-      });
-      const recId = rec.id;
-      const data = await gasPost({
-        action: "transcribe",
-        member: rec.member,
-        interviewee: rec.interviewee,
-        audio: b64,
-        mimeType,
-        duration: rec.duration,
-        date: rec.date,
-        mode: "interview",
-        systemPrompt: SYSTEM_PROMPT,
-        existingId: recId || null
-      }, 60000);
-      if (!data.success) throw new Error(data.error || "GASエラー");
-      const finalId = data.id || recId;
-      if (data.status === "done" && data.sections) {
-        // 念のための互換パス：同期的に結果が返ってきた場合はそのまま反映
-        applyDone(finalId, data.sections);
-        finish();
-        return;
-      }
-      // GAS側で非同期キューに登録済み。ポーリングで完了を待つ。
-      setTimeout(() => pollStatus(finalId, 1), 1500);
-    } catch (e) {
-      let msg = e.message || "不明なエラー";
-      if (msg.includes("Failed to fetch") || msg.includes("NetworkError") || msg.includes("Load failed")) {
-        msg = "通信が切断されました。音声の保存自体は完了している場合があるので、しばらくしてから履歴を確認してください。";
-      }
-      setError("処理エラー: " + msg);
-      finish();
-    }
-  };
-  const deleteRec = id => {
-    setRecs(prev => prev.filter(r => r.localId !== id));
-    idbDelete(id);
-    setConfirmDel(null);
-  };
-  const toggleAutoProcess = () => {
-    const v = !autoProcess;
-    setAutoProcess(v);
-    lsSetAuto(v);
-  };
-  const inputStyle = {
-    width: "100%",
-    background: C.bg,
-    color: C.text,
-    border: `1.5px solid ${C.sep}`,
-    borderRadius: 10,
-    padding: "11px 13px 11px 32px",
-    fontSize: 15,
-    outline: "none",
-    WebkitUserSelect: "text",
-    userSelect: "text"
-  };
   return /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
@@ -2244,65 +1343,27 @@ function HomeScreen({
       flexDirection: "column",
       minHeight: "100%"
     }
-  }, error && /*#__PURE__*/React.createElement("div", {
-    style: {
-      background: `${C.red}12`,
-      border: `1px solid ${C.red}25`,
-      borderRadius: 10,
-      padding: "10px 12px",
-      marginBottom: 10,
-      fontSize: 13,
-      color: C.red,
-      display: "flex",
-      alignItems: "center",
-      gap: 8
-    }
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: "circle-exclamation",
-    size: 14,
-    color: C.red
-  }), /*#__PURE__*/React.createElement("span", {
-    style: {
-      flex: 1
-    }
-  }, error), /*#__PURE__*/React.createElement("button", {
-    onClick: () => setError(null),
-    style: {
-      background: "none",
-      border: "none",
-      cursor: "pointer"
-    }
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: "xmark",
-    size: 13,
-    color: C.text2
-  }))), recs.length === 0 && recState !== "recording" && recState !== "paused" ? /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1,
-      display: "flex",
-      flexDirection: "column"
-    }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "center",
-      justifyContent: "center",
-      padding: "20px 0",
-      flex: recentRec ? 0 : 1
-    }
-  }, /*#__PURE__*/React.createElement("p", {
-    style: {
-      color: C.text2,
-      fontSize: 14,
-      lineHeight: 1.7,
+      background: C.surface,
+      borderRadius: 14,
+      border: `1px solid ${C.sep}`,
+      padding: "18px 16px",
+      marginBottom: 16,
       textAlign: "center"
     }
-  }, "録音を開始してください")), recentRec && /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement(Ic, {
+    n: "microphone",
+    size: 22,
+    color: C.purple
+  }), /*#__PURE__*/React.createElement("p", {
     style: {
+      fontSize: 13,
+      color: C.text,
+      lineHeight: 1.7,
       marginTop: 8
     }
-  }, /*#__PURE__*/React.createElement("p", {
+  }, "iPhone純正の「ボイスメモ」アプリで録音し、共有ボタンからショートカットを選んで送信してください。文字起こし・要約が完了すると、ここと履歴に反映されます。")), recentRec ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       fontWeight: 600,
@@ -2336,7 +1397,13 @@ function HomeScreen({
       gap: 5,
       marginBottom: 2
     }
-  }, /*#__PURE__*/React.createElement("span", {
+  }, recentRec.interviewee && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      fontWeight: 500,
+      color: C.purple
+    }
+  }, recentRec.interviewee), /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 10,
       color: C.text2,
@@ -2350,7 +1417,17 @@ function HomeScreen({
       fontSize: 11,
       color: C.text2
     }
-  }, relDate(recentRec.date)), recentRec.sections?.sections?.[0]?.items?.[0] && /*#__PURE__*/React.createElement("p", {
+  }, relDate(recentRec.date)), recentRec.status === "error" ? /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11,
+      color: C.red
+    }
+  }, "処理に失敗しました（履歴から再試行できます）") : ["queued", "processing", "chunking"].includes(recentRec.status) ? /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11,
+      color: C.text2
+    }
+  }, "AI処理中...") : recentRec.sections?.sections?.[0]?.items?.[0] && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 11,
       color: C.text2,
@@ -2365,464 +1442,31 @@ function HomeScreen({
     style: {
       flexShrink: 0
     }
-  })))) : recs.map(rec => /*#__PURE__*/React.createElement("div", {
-    key: rec.localId,
+  }))) : /*#__PURE__*/React.createElement("div", {
     style: {
-      background: C.surface,
-      borderRadius: 14,
-      overflow: "hidden",
-      marginBottom: 12,
-      border: `1px solid ${C.sep}`,
-      boxShadow: "0 1px 4px rgba(0,0,0,.05)"
-    }
-  }, confirmDel === rec.localId ? /*#__PURE__*/React.createElement("div", {
-    style: {
-      padding: 18,
-      textAlign: "center"
+      flex: 1,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center"
     }
   }, /*#__PURE__*/React.createElement("p", {
     style: {
-      fontSize: 15,
-      fontWeight: 500,
-      color: C.text,
-      marginBottom: 5
-    }
-  }, "録音を削除しますか？"), /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 13,
       color: C.text2,
-      marginBottom: 16
+      fontSize: 14
     }
-  }, "この操作は取り消せません"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      gap: 10
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => setConfirmDel(null),
-    style: {
-      flex: 1,
-      padding: "11px 0",
-      borderRadius: 10,
-      background: C.bg,
-      border: `1px solid ${C.sep}`,
-      fontSize: 15,
-      color: C.text,
-      cursor: "pointer"
-    }
-  }, "キャンセル"), /*#__PURE__*/React.createElement("button", {
-    onClick: () => deleteRec(rec.localId),
-    style: {
-      flex: 1,
-      padding: "11px 0",
-      borderRadius: 10,
-      background: C.red,
-      border: "none",
-      fontSize: 15,
-      fontWeight: 600,
-      color: "#fff",
-      cursor: "pointer"
-    }
-  }, "削除"))) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
-    style: {
-      padding: "12px 14px 8px"
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      alignItems: "center",
-      gap: 6,
-      flexWrap: "wrap",
-      marginBottom: 3
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 15,
-      fontWeight: 600,
-      color: C.text
-    }
-  }, rec.member), rec.interviewee && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 13,
-      color: C.text2
-    }
-  }, "→"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 13,
-      fontWeight: 500,
-      color: C.purple
-    }
-  }, rec.interviewee))), /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 11,
-      color: C.text2
-    }
-  }, relDate(rec.date), " · ", rec.duration)), rec.url && /*#__PURE__*/React.createElement(AudioPlayer, {
-    url: rec.url,
-    onDelete: () => setConfirmDel(rec.localId)
-  }), rec.url && !rec.processed && /*#__PURE__*/React.createElement("div", {
-    style: {
-      padding: "8px 14px 12px"
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => processRec(rec, true),
-    disabled: processingId === rec.localId,
-    style: {
-      width: "100%",
-      padding: "11px",
-      background: processingId === rec.localId ? `${C.blue}60` : C.blue,
-      color: "#fff",
-      border: "none",
-      borderRadius: 10,
-      fontSize: 14,
-      fontWeight: 600,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      gap: 7,
-      cursor: "pointer"
-    }
-  }, processingId === rec.localId ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Ic, {
-    n: "spinner",
-    size: 14,
-    color: "#fff",
-    cls: "spin"
-  }), "AI処理中...") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Ic, {
-    n: "wand-magic-sparkles",
-    size: 14,
-    color: "#fff"
-  }), "Geminiで文字起こし＆要約"))), rec.processed && rec.sections && /*#__PURE__*/React.createElement("button", {
-    onClick: () => setSelectedRec(rec),
-    style: {
-      width: "100%",
-      padding: "6px 14px 12px",
-      background: "none",
-      border: "none",
-      cursor: "pointer",
-      textAlign: "left",
-      borderTop: `1px solid ${C.sep}`
-    }
-  }, (rec.sections.sections || []).slice(0, 2).map((sec, i) => /*#__PURE__*/React.createElement("div", {
-    key: i,
-    style: {
-      display: "flex",
-      alignItems: "flex-start",
-      gap: 6,
-      padding: "3px 0"
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      width: 5,
-      height: 5,
-      borderRadius: "50%",
-      background: C.purple,
-      marginTop: 6,
-      flexShrink: 0
-    }
-  }), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 12,
-      color: C.text2,
-      lineHeight: 1.5
-    }
-  }, (sec.items || [])[0]))), /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 12,
-      color: C.blue,
-      marginTop: 4,
-      fontWeight: 500
-    }
-  }, "詳細を見る →"))))), !isActive && /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: "auto",
-      paddingTop: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "relative"
-    }
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: "user",
-    size: 13,
-    color: C.text2,
-    style: {
-      position: "absolute",
-      left: 11,
-      top: "50%",
-      transform: "translateY(-50%)"
-    }
-  }), /*#__PURE__*/React.createElement("input", {
-    type: "text",
-    value: interviewee,
-    onChange: e => {
-      setInterviewee(e.target.value);
-      setShowSugg(true);
-    },
-    onFocus: () => setShowSugg(true),
-    onBlur: () => setTimeout(() => setShowSugg(false), 150),
-    placeholder: "相手（任意）",
-    style: inputStyle
-  }), showSugg && suggestions.filter(s => !interviewee || s.includes(interviewee)).slice(0, 5).length > 0 && /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "absolute",
-      top: "100%",
-      left: 0,
-      right: 0,
-      background: C.surface,
-      border: `1px solid ${C.sep}`,
-      borderRadius: 10,
-      zIndex: 50,
-      boxShadow: "0 4px 16px rgba(0,0,0,.1)",
-      overflow: "hidden",
-      marginTop: 4
-    }
-  }, suggestions.filter(s => !interviewee || s.includes(interviewee)).slice(0, 5).map(s => /*#__PURE__*/React.createElement("button", {
-    key: s,
-    onMouseDown: () => {
-      setInterviewee(s);
-      setShowSugg(false);
-    },
-    style: {
-      width: "100%",
-      padding: "10px 14px",
-      textAlign: "left",
-      background: "none",
-      border: "none",
-      cursor: "pointer",
-      fontSize: 14,
-      color: C.text,
-      borderBottom: `1px solid ${C.sep}`
-    }
-  }, s))))))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      flexShrink: 0,
-      background: C.surface,
-      borderTop: `1px solid ${C.sep}`,
-      padding: "10px 16px 0",
-      paddingBottom: "max(12px,env(safe-area-inset-bottom,12px))"
-    }
-  }, isActive && /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginBottom: 10
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      justifyContent: "space-between",
-      alignItems: "center",
-      marginBottom: 6
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      alignItems: "center",
-      gap: 6
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 12,
-      color: recState === "recording" ? C.red : C.text2,
-      fontWeight: 600
-    }
-  }, recState === "recording" ? "● 録音中" : "⏸ 一時停止中"), (member || interviewee) && /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 12,
-      color: C.text2
-    }
-  }, member, interviewee ? " → " + interviewee : "")), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 12,
-      color: C.text2,
-      fontVariantNumeric: "tabular-nums",
-      fontWeight: 500
-    }
-  }, fmt(timer))), /*#__PURE__*/React.createElement(Waveform, {
-    stream: stream,
-    paused: recState === "paused"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      gap: 24
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      width: 44,
-      opacity: recState === "recording" ? 1 : 0,
-      transition: "opacity .2s",
-      pointerEvents: recState === "recording" ? "auto" : "none"
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => {
-      mrRef.current?.pause();
-      setRecState("paused");
-    },
-    style: {
-      width: 44,
-      height: 44,
-      borderRadius: "50%",
-      background: C.bg,
-      border: `1px solid ${C.sep}`,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      cursor: "pointer"
-    }
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: "pause",
-    size: 17,
-    color: C.text
-  }))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "relative"
-    }
-  }, recState === "recording" && /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "absolute",
-      inset: -8,
-      borderRadius: "50%",
-      background: `${C.red}22`,
-      animation: "pulse-ring 1.4s ease-out infinite"
-    }
-  }), /*#__PURE__*/React.createElement("button", {
-    onClick: isActive ? stopRec : startRec,
-    style: {
-      width: 72,
-      height: 72,
-      position: "relative",
-      zIndex: 1,
-      borderRadius: isActive ? "22px" : "50%",
-      background: C.red,
-      border: "none",
-      cursor: "pointer",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      boxShadow: isActive ? "none" : `0 4px 16px ${C.red}45`,
-      transition: "border-radius .35s cubic-bezier(.34,1.56,.64,1),box-shadow .3s"
-    }
-  }, isActive ? /*#__PURE__*/React.createElement("div", {
-    style: {
-      width: 26,
-      height: 26,
-      borderRadius: 6,
-      background: "#fff"
-    }
-  }) : /*#__PURE__*/React.createElement(Ic, {
-    n: "microphone",
-    size: 28,
-    color: "#fff"
-  }))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      width: 44,
-      opacity: recState === "paused" ? 1 : 0,
-      transition: "opacity .2s",
-      pointerEvents: recState === "paused" ? "auto" : "none"
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => {
-      mrRef.current?.resume();
-      setRecState("recording");
-    },
-    style: {
-      width: 44,
-      height: 44,
-      borderRadius: "50%",
-      background: `${C.green}15`,
-      border: `1px solid ${C.green}30`,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      cursor: "pointer"
-    }
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: "play",
-    size: 16,
-    color: C.green,
-    style: {
-      marginLeft: 2
-    }
-  })))), /*#__PURE__*/React.createElement("p", {
-    style: {
-      textAlign: "center",
-      fontSize: 11,
-      color: C.text2,
-      marginTop: 6
-    }
-  }, recState === "recording" ? "タップして停止" : recState === "paused" ? "再開または停止" : "タップして録音"), isActive && !("wakeLock" in navigator) && /*#__PURE__*/React.createElement("p", {
-    style: {
-      textAlign: "center",
-      fontSize: 10,
-      color: C.orange,
-      marginTop: 4,
-      padding: "0 20px"
-    }
-  }, "⚠️ この端末は自動画面ロック防止に非対応です。録音中は画面を手動でつけたままにしてください。"), recState === "recording" && longRecWarned && /*#__PURE__*/React.createElement("p", {
-    style: {
-      textAlign: "center",
-      fontSize: 10,
-      color: C.orange,
-      marginTop: 4,
-      padding: "0 20px"
-    }
-  }, "⚠️ 60分を超える長い録音になっています。AI処理に時間がかかったり失敗しやすくなるため、区切りの良いところで一度停止し、続きは新しい録音として分けることをおすすめします。"), recState === "idle" && /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
-      padding: "6px 4px 0"
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 11,
-      color: C.text2
-    }
-  }, "録音停止後に自動で要約"), /*#__PURE__*/React.createElement("button", {
-    onClick: toggleAutoProcess,
-    style: {
-      width: 36,
-      height: 20,
-      borderRadius: 10,
-      border: "none",
-      cursor: "pointer",
-      background: autoProcess ? C.blue : "rgba(120,120,128,.2)",
-      transition: "background .2s",
-      position: "relative",
-      flexShrink: 0
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      width: 16,
-      height: 16,
-      borderRadius: "50%",
-      background: "#fff",
-      position: "absolute",
-      top: 2,
-      left: autoProcess ? 18 : 2,
-      transition: "left .2s",
-      boxShadow: "0 1px 3px rgba(0,0,0,.2)"
-    }
-  })))), selectedRec && /*#__PURE__*/React.createElement(SummaryModal, {
+  }, "まだ記録がありません")))), selectedRec && /*#__PURE__*/React.createElement(SummaryModal, {
     item: selectedRec,
     onClose: () => setSelectedRec(null),
-    onSaved: secs => {
-      setSelectedRec(s => ({
-        ...s,
-        sections: secs
-      }));
-      setRecs(rs => rs.map(r => r.localId === selectedRec.localId ? {
-        ...r,
-        sections: secs
-      } : r));
-    }
+    onSaved: secs => setSelectedRec(s => ({
+      ...s,
+      sections: secs
+    }))
   }));
 }
 
 // ── HISTORY SCREEN ────────────────────────────────────────
 function HistoryScreen({
-  memberFilter,
-  newRecord
+  memberFilter
 }) {
   const [records, setRecords] = useState([]);
   const [total, setTotal] = useState(0);
@@ -2834,6 +1478,7 @@ function HistoryScreen({
   const [selected, setSelected] = useState(null);
   const [delTarget, setDelTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
+  const [retryingIds, setRetryingIds] = useState(new Set());
   const offsetRef = useRef(0),
     sentinelRef = useRef(null);
   const fetchFirst = useCallback(async () => {
@@ -2887,12 +1532,6 @@ function HistoryScreen({
     fetchFirst();
   }, [fetchFirst]);
   useEffect(() => {
-    if (newRecord) setRecords(prev => {
-      const ex = prev.find(r => r.id === newRecord.id);
-      return ex ? prev : [newRecord, ...prev];
-    });
-  }, [newRecord]);
-  useEffect(() => {
     if (!sentinelRef.current) return;
     const ob = new IntersectionObserver(entries => {
       if (entries[0].isIntersecting && hasMore && !moreLoading) fetchMore();
@@ -2917,6 +1556,27 @@ function HistoryScreen({
       setError("削除に失敗しました。");
     }
     setDeleting(false);
+  };
+  const doRetry = async item => {
+    setRetryingIds(prev => new Set(prev).add(item.id));
+    try {
+      await gasPost({
+        action: "retryRecord",
+        id: item.id
+      });
+      setRecords(prev => prev.map(r => r.id === item.id ? {
+        ...r,
+        status: "queued",
+        processError: ""
+      } : r));
+    } catch (e) {
+      setError("再試行の送信に失敗しました。通信を確認してもう一度お試しください。");
+    }
+    setRetryingIds(prev => {
+      const next = new Set(prev);
+      next.delete(item.id);
+      return next;
+    });
   };
   const filtered = records.filter(item => !q || (item.sections?._transcript || "").includes(q) || (item.sections?.sections || []).some(s => (s.items || []).some(i => i.includes(q))) || (item.member || "").includes(q) || (item.interviewee || "").includes(q));
   return /*#__PURE__*/React.createElement("div", {
@@ -3130,7 +1790,20 @@ function HistoryScreen({
       color: C.text2,
       marginBottom: 2
     }
-  }, relDate(item.date)), item.sections?.sections?.[0]?.items?.[0] && /*#__PURE__*/React.createElement("p", {
+  }, relDate(item.date)), item.status === "error" ? /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11,
+      color: C.red,
+      whiteSpace: "nowrap",
+      overflow: "hidden",
+      textOverflow: "ellipsis"
+    }
+  }, "処理に失敗しました: ", item.processError || "不明なエラー") : ["queued", "processing", "chunking"].includes(item.status) ? /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11,
+      color: C.text2
+    }
+  }, "AI処理中...") : item.sections?.sections?.[0]?.items?.[0] && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 11,
       color: C.text2,
@@ -3138,7 +1811,27 @@ function HistoryScreen({
       overflow: "hidden",
       textOverflow: "ellipsis"
     }
-  }, item.sections.sections[0].items[0])), /*#__PURE__*/React.createElement("button", {
+  }, item.sections.sections[0].items[0])), item.status === "error" && /*#__PURE__*/React.createElement("button", {
+    onClick: () => doRetry(item),
+    disabled: retryingIds.has(item.id),
+    style: {
+      padding: "0 14px",
+      height: "100%",
+      minHeight: 72,
+      display: "flex",
+      alignItems: "center",
+      background: "none",
+      border: "none",
+      cursor: retryingIds.has(item.id) ? "default" : "pointer",
+      flexShrink: 0,
+      borderLeft: `1px solid ${C.sep}`
+    }
+  }, /*#__PURE__*/React.createElement(Ic, {
+    n: retryingIds.has(item.id) ? "spinner" : "rotate-right",
+    size: 14,
+    color: C.purple,
+    cls: retryingIds.has(item.id) ? "spin" : ""
+  })), /*#__PURE__*/React.createElement("button", {
     onClick: () => setDelTarget(item),
     style: {
       padding: "0 14px",
@@ -3279,9 +1972,6 @@ function App() {
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
   const [showOfflineBanner, setShowOfflineBanner] = useState(false);
   const [member, setMember] = useState("");
-  const [interviewee, setInterviewee] = useState("");
-  const [newRecord, setNewRecord] = useState(null);
-  const [isRecording, setIsRecording] = useState(false);
   useEffect(() => {
     if (authed && currentUser?.name) setMember(currentUser.name);
   }, [authed]);
@@ -3301,20 +1991,6 @@ function App() {
       window.removeEventListener("offline", off);
     };
   }, []);
-  useEffect(() => {
-    const h = e => {
-      if (isRecording) {
-        e.preventDefault();
-        e.returnValue = "録音中です。ページを離れると録音データが失われます。";
-        return e.returnValue;
-      }
-    };
-    window.addEventListener("beforeunload", h);
-    return () => window.removeEventListener("beforeunload", h);
-  }, [isRecording]);
-  useEffect(() => {
-    window.__vmIsRecording = isRecording;
-  }, [isRecording]);
   const handleLogin = u => {
     setCurrentUser(u);
     setMember(u.name || "");
@@ -3328,14 +2004,6 @@ function App() {
   };
   const handleNav = k => {
     setScreen(k === "home" ? "home" : "history");
-    if (k === "home") {
-      // 以前はここでHomeScreenを強制再マウントしていたが、それだと録音直後や
-      // AI処理失敗直後の未処理録音一覧（recs）がその場で消え、IndexedDBからの
-      // 復元に賭ける形になってしまっていた。ホームへの往復では画面の状態を
-      // そのまま保持し、余計なリセットはしない。
-      setMember(currentUser?.name || "");
-      setInterviewee("");
-    }
   };
   if (!authed) return /*#__PURE__*/React.createElement("div", {
     style: {
@@ -3362,7 +2030,6 @@ function App() {
     onClose: () => setDrawerOpen(false),
     onNav: handleNav,
     onLogout: handleLogout,
-    isRecording: isRecording,
     userName: currentUser?.name || ""
   }), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -3459,19 +2126,9 @@ function App() {
       flexDirection: "column"
     }
   }, screen === "home" ? /*#__PURE__*/React.createElement(HomeScreen, {
-    member: member,
-    interviewee: interviewee,
-    setInterviewee: setInterviewee,
-    isOnline: isOnline,
-    onRecordSaved: rec => setNewRecord({
-      ...rec,
-      _ts: Date.now()
-    }),
-    onRecordingChange: setIsRecording,
-    currentUser: currentUser
+    member: member
   }) : /*#__PURE__*/React.createElement(HistoryScreen, {
-    memberFilter: currentUser?.name || "",
-    newRecord: newRecord
+    memberFilter: currentUser?.name || ""
   })));
 }
 class ErrorBoundary extends React.Component {
