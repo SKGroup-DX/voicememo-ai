@@ -6,7 +6,7 @@
 
 iOS PWA。音声録音 → Gemini AIで文字起こし・要約。
 
-URL: https://kasuyakouta.github.io/voicememo-ai/
+URL: https://skgroup-dx.github.io/voicememo-ai/
 
 
 
