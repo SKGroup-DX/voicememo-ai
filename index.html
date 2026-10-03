@@ -1352,6 +1352,34 @@ function HomeScreen({ member }) {
   useEffect(() => {
     fetchRecent();
   }, [fetchRecent]);
+  // 処理待ち・処理中の記録があれば5秒おきに状態を確認し、完了/失敗したら表示を
+  // 切り替える。setRecentRecで毎回新しいオブジェクトを作るため、このeffectが
+  // 再実行されて次の確認が予約される。GAS側で固まった場合に備え約10分で打ち切る。
+  useEffect(() => {
+    if (!recentRec?.id || !["queued", "processing", "chunking"].includes(recentRec.status)) return;
+    if ((recentRec._polls || 0) >= 120) return;
+    const id = recentRec.id;
+    const t = setTimeout(() => {
+      gasGet({
+        action: "getRecordStatus",
+        id
+      }, 15000).then(d => {
+        setRecentRec(r => r && r.id === id ? {
+          ...r,
+          status: d.found ? d.status : r.status,
+          processError: d.error || "",
+          sections: d.found && d.status === "done" ? normalizeSections(d.sections) : r.sections,
+          _polls: (r._polls || 0) + 1
+        } : r);
+      }).catch(() => {
+        setRecentRec(r => r && r.id === id ? {
+          ...r,
+          _polls: (r._polls || 0) + 1
+        } : r);
+      });
+    }, 5000);
+    return () => clearTimeout(t);
+  }, [recentRec]);
   const handleUpload = async () => {
     if (!file) {
       setError("音声ファイルを選択してください。");
@@ -1591,7 +1619,7 @@ function HomeScreen({ member }) {
       fontSize: 11,
       color: C.red
     }
-  }, "処理に失敗しました（履歴から再試行できます）") : ["queued", "processing", "chunking"].includes(recentRec.status) ? /*#__PURE__*/React.createElement("p", {
+  }, "処理に失敗しました（履歴から再試行できます）", recentRec.processError ? "：" + recentRec.processError : "") : ["queued", "processing", "chunking"].includes(recentRec.status) ? /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 11,
       color: C.text2
