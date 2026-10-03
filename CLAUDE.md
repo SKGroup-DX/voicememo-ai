@@ -4,7 +4,7 @@
 
 \## 概要
 
-iOS PWA。音声録音 → Gemini AIで文字起こし・要約。
+iOS PWA。iPhone純正「ボイスメモ」で録音した音声ファイルをアップロード → Gemini AIで文字起こし・要約（1on1／複数人会議を自動判定してフォーマットを出し分け）。アプリ内での録音機能は持たない。
 
 URL: https://skgroup-dx.github.io/voicememo-ai/
 
