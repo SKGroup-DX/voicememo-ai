@@ -456,6 +456,27 @@ async function gasPost(b, timeoutMs = 30000) {
   return json;
 }
 
+function fmtDuration(s) {
+  if (!isFinite(s) || s < 0) return "00:00";
+  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+}
+// アップロードされた音声ファイルの長さを取得する（取得できなければ0を返す）。
+function getAudioDuration(file) {
+  return new Promise(resolve => {
+    const url = URL.createObjectURL(file);
+    const audio = new Audio();
+    audio.preload = "metadata";
+    audio.onloadedmetadata = () => {
+      URL.revokeObjectURL(url);
+      resolve(isFinite(audio.duration) ? audio.duration : 0);
+    };
+    audio.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(0);
+    };
+    audio.src = url;
+  });
+}
 function normalizeSections(s) {
   // GAS/Sheets経由で読み込んだ記録は、sectionsがJSON文字列のまま返ってくることがある
   // （保存時にJSON.stringifyしたセル値をそのまま返している場合）。
@@ -1303,13 +1324,18 @@ function SummaryModal({
 }
 
 // ── HOME SCREEN ───────────────────────────────────────────
-// ホーム画面。録音はiPhone純正の「ボイスメモ」アプリ＋Appleショートカット経由で
-// 直接GASへ送信される（本アプリのブラウザ内録音機能は撤去済み）。ここでは
-// 直近の記録を確認できるだけのシンプルな画面にしている。
+// ホーム画面。録音はiPhone純正の「ボイスメモ」アプリで行い、保存済みの音声
+// ファイルをここから選んでアップロードする（ブラウザ内録音・ショートカット
+// 連携はどちらも撤去済み。ファイルを選ぶだけのシンプルな経路に一本化した）。
 function HomeScreen({ member }) {
   const [selectedRec, setSelectedRec] = useState(null);
   const [recentRec, setRecentRec] = useState(null);
-  useEffect(() => {
+  const [file, setFile] = useState(null);
+  const [interviewee, setInterviewee] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState(null);
+  const [fileInputKey, setFileInputKey] = useState(0);
+  const fetchRecent = useCallback(() => {
     if (!member) return;
     gasGet({
       action: "getHistory",
@@ -1323,6 +1349,65 @@ function HomeScreen({ member }) {
       });
     }).catch(() => {});
   }, [member]);
+  useEffect(() => {
+    fetchRecent();
+  }, [fetchRecent]);
+  const handleUpload = async () => {
+    if (!file) {
+      setError("音声ファイルを選択してください。");
+      return;
+    }
+    setError(null);
+    setUploading(true);
+    try {
+      const fileSizeMB = Math.round(file.size / 1024 / 1024);
+      if (file.size > 40 * 1024 * 1024) {
+        throw new Error(`音声ファイルが大きすぎます（${fileSizeMB}MB）。`);
+      }
+      const durationSec = await getAudioDuration(file);
+      const b64 = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onerror = () => rej(new Error("音声データの読み込みに失敗しました"));
+        r.onloadend = () => {
+          if (typeof r.result !== "string") {
+            rej(new Error("音声データの読み込みに失敗しました"));
+            return;
+          }
+          res(r.result.split(",")[1]);
+        };
+        r.readAsDataURL(file);
+      });
+      const data = await gasPost({
+        action: "transcribe",
+        member,
+        interviewee,
+        audio: b64,
+        mimeType: file.type || "audio/mp4",
+        duration: fmtDuration(durationSec),
+        mode: "meeting"
+      }, 60000);
+      if (!data.success) throw new Error(data.error || "GASエラー");
+      setRecentRec({
+        id: data.id,
+        date: new Date().toString(),
+        duration: fmtDuration(durationSec),
+        member,
+        interviewee,
+        status: "queued",
+        sections: null
+      });
+      setFile(null);
+      setInterviewee("");
+      setFileInputKey(k => k + 1);
+    } catch (e) {
+      let msg = e.message || "不明なエラー";
+      if (msg.includes("Failed to fetch") || msg.includes("NetworkError") || msg.includes("Load failed")) {
+        msg = "通信が切断されました。しばらくしてから履歴を確認してください。";
+      }
+      setError("アップロードに失敗しました: " + msg);
+    }
+    setUploading(false);
+  };
   return /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
@@ -1348,22 +1433,106 @@ function HomeScreen({ member }) {
       background: C.surface,
       borderRadius: 14,
       border: `1px solid ${C.sep}`,
-      padding: "18px 16px",
-      marginBottom: 16,
-      textAlign: "center"
+      padding: "16px",
+      marginBottom: 16
     }
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: "microphone",
-    size: 22,
-    color: C.purple
-  }), /*#__PURE__*/React.createElement("p", {
+  }, /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 13,
-      color: C.text,
+      color: C.text2,
       lineHeight: 1.7,
-      marginTop: 8
+      marginBottom: 12
     }
-  }, "iPhone純正の「ボイスメモ」アプリで録音し、共有ボタンからショートカットを選んで送信してください。文字起こし・要約が完了すると、ここと履歴に反映されます。")), recentRec ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
+  }, "iPhone純正の「ボイスメモ」アプリで録音し、共有ボタンから「ファイルに保存」した音声ファイルを、下のボタンから選んで送信してください。"), error && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: `${C.red}12`,
+      border: `1px solid ${C.red}25`,
+      borderRadius: 10,
+      padding: "9px 11px",
+      marginBottom: 10,
+      fontSize: 12,
+      color: C.red
+    }
+  }, error), /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      width: "100%",
+      padding: "11px 13px",
+      background: C.bg,
+      border: `1.5px dashed ${C.sep}`,
+      borderRadius: 10,
+      cursor: "pointer",
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement(Ic, {
+    n: "paperclip",
+    size: 14,
+    color: C.text2
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 13,
+      color: file ? C.text : C.text2,
+      flex: 1,
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap"
+    }
+  }, file ? file.name : "音声ファイルを選択..."), /*#__PURE__*/React.createElement("input", {
+    key: fileInputKey,
+    type: "file",
+    accept: "audio/*,.m4a,.mp3,.wav",
+    onChange: e => setFile(e.target.files[0] || null),
+    style: {
+      display: "none"
+    }
+  })), /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    value: interviewee,
+    onChange: e => setInterviewee(e.target.value),
+    placeholder: "相手・参加者（任意）",
+    style: {
+      width: "100%",
+      background: C.bg,
+      color: C.text,
+      border: `1.5px solid ${C.sep}`,
+      borderRadius: 10,
+      padding: "11px 13px",
+      fontSize: 15,
+      outline: "none",
+      marginBottom: 10,
+      WebkitUserSelect: "text",
+      userSelect: "text"
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    onClick: handleUpload,
+    disabled: uploading || !file,
+    style: {
+      width: "100%",
+      padding: "11px",
+      background: uploading || !file ? `${C.blue}60` : C.blue,
+      color: "#fff",
+      border: "none",
+      borderRadius: 10,
+      fontSize: 14,
+      fontWeight: 600,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 7,
+      cursor: uploading || !file ? "default" : "pointer"
+    }
+  }, uploading ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Ic, {
+    n: "spinner",
+    size: 14,
+    color: "#fff",
+    cls: "spin"
+  }), "送信中...") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Ic, {
+    n: "wand-magic-sparkles",
+    size: 14,
+    color: "#fff"
+  }), "解析・要約を開始"))), recentRec ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       fontWeight: 600,
