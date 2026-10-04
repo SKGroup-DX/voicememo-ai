@@ -456,27 +456,6 @@ async function gasPost(b, timeoutMs = 30000) {
   return json;
 }
 
-function fmtDuration(s) {
-  if (!isFinite(s) || s < 0) return "00:00";
-  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
-}
-// アップロードされた音声ファイルの長さを取得する（取得できなければ0を返す）。
-function getAudioDuration(file) {
-  return new Promise(resolve => {
-    const url = URL.createObjectURL(file);
-    const audio = new Audio();
-    audio.preload = "metadata";
-    audio.onloadedmetadata = () => {
-      URL.revokeObjectURL(url);
-      resolve(isFinite(audio.duration) ? audio.duration : 0);
-    };
-    audio.onerror = () => {
-      URL.revokeObjectURL(url);
-      resolve(0);
-    };
-    audio.src = url;
-  });
-}
 function normalizeSections(s) {
   // GAS/Sheets経由で読み込んだ記録は、sectionsがJSON文字列のまま返ってくることがある
   // （保存時にJSON.stringifyしたセル値をそのまま返している場合）。
@@ -889,7 +868,9 @@ function SummaryModal({
   };
   const buildText = () => {
     const t = `${item.member}${item.interviewee ? " → " + item.interviewee : ""}`;
-    let lines = [`【面談記録】${t}`, `日時：${item.date}　時間：${item.duration}`, ""];
+    const kind = item.sections?.meetingType === "group" ? "会議記録" : "面談記録";
+    const dur = safeDur(item.duration);
+    let lines = [`【${kind}】${t}`, `日時：${item.date}${dur ? "　時間：" + dur : ""}`, ""];
     secs.forEach(s => {
       lines.push(`${s.emoji} ${s.label}`);
       (s.items || []).forEach(i => lines.push(`  ・${i}`));
@@ -977,7 +958,7 @@ function SummaryModal({
       fontSize: 11,
       color: C.text2
     }
-  }, relDate(item.date), " · ", safeDur(item.duration))), /*#__PURE__*/React.createElement("button", {
+  }, relDate(item.date), safeDur(item.duration) ? " · " + safeDur(item.duration) : "")), /*#__PURE__*/React.createElement("button", {
     onClick: onClose,
     style: {
       width: 32,
@@ -1324,17 +1305,18 @@ function SummaryModal({
 }
 
 // ── HOME SCREEN ───────────────────────────────────────────
-// ホーム画面。録音はiPhone純正の「ボイスメモ」アプリで行い、保存済みの音声
-// ファイルをここから選んでアップロードする（ブラウザ内録音・ショートカット
-// 連携はどちらも撤去済み。ファイルを選ぶだけのシンプルな経路に一本化した）。
+// ホーム画面。録音と文字起こしはiPhone純正の「ボイスメモ」アプリで行い、その
+// 文字起こしテキストをここに貼り付けて要約だけを依頼する。音声のアップロードや
+// AIによる文字起こしをやめたことで、要約は送信したその場で返ってくる。
+// スプレッドシートのセルの上限（5万文字）に、文字起こし本文と要約を合わせて収めるための上限。
+const MAX_TRANSCRIPT_CHARS = 30000;
 function HomeScreen({ member }) {
   const [selectedRec, setSelectedRec] = useState(null);
   const [recentRec, setRecentRec] = useState(null);
-  const [file, setFile] = useState(null);
+  const [transcript, setTranscript] = useState("");
   const [interviewee, setInterviewee] = useState("");
-  const [uploading, setUploading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
-  const [fileInputKey, setFileInputKey] = useState(0);
   const fetchRecent = useCallback(() => {
     if (!member) return;
     gasGet({
@@ -1380,61 +1362,44 @@ function HomeScreen({ member }) {
     }, 5000);
     return () => clearTimeout(t);
   }, [recentRec]);
-  const handleUpload = async () => {
-    if (!file) {
-      setError("音声ファイルを選択してください。");
-      return;
-    }
+  const trimmed = transcript.trim();
+  const tooLong = trimmed.length > MAX_TRANSCRIPT_CHARS;
+  const canSubmit = !!trimmed && !tooLong && !submitting;
+  const handleSubmit = async () => {
+    if (!canSubmit) return;
     setError(null);
-    setUploading(true);
+    setSubmitting(true);
     try {
-      const fileSizeMB = Math.round(file.size / 1024 / 1024);
-      if (file.size > 40 * 1024 * 1024) {
-        throw new Error(`音声ファイルが大きすぎます（${fileSizeMB}MB）。`);
-      }
-      const durationSec = await getAudioDuration(file);
-      const b64 = await new Promise((res, rej) => {
-        const r = new FileReader();
-        r.onerror = () => rej(new Error("音声データの読み込みに失敗しました"));
-        r.onloadend = () => {
-          if (typeof r.result !== "string") {
-            rej(new Error("音声データの読み込みに失敗しました"));
-            return;
-          }
-          res(r.result.split(",")[1]);
-        };
-        r.readAsDataURL(file);
-      });
+      // GAS側はその場で要約を試み、無料枠の混雑などで間に合わなかった場合だけ
+      // "queued"を返して定期実行に回す（その場合は状態確認で完了を待つ）。
       const data = await gasPost({
-        action: "transcribe",
+        action: "summarizeText",
         member,
         interviewee,
-        audio: b64,
-        mimeType: file.type || "audio/mp4",
-        duration: fmtDuration(durationSec),
-        mode: "meeting"
+        transcript: trimmed
       }, 60000);
       if (!data.success) throw new Error(data.error || "GASエラー");
-      setRecentRec({
+      const rec = {
         id: data.id,
         date: new Date().toString(),
-        duration: fmtDuration(durationSec),
+        duration: "",
         member,
         interviewee,
-        status: "queued",
-        sections: null
-      });
-      setFile(null);
+        status: data.status,
+        sections: data.status === "done" ? normalizeSections(data.sections) : null
+      };
+      setRecentRec(rec);
+      if (data.status === "done") setSelectedRec(rec);
+      setTranscript("");
       setInterviewee("");
-      setFileInputKey(k => k + 1);
     } catch (e) {
       let msg = e.message || "不明なエラー";
       if (msg.includes("Failed to fetch") || msg.includes("NetworkError") || msg.includes("Load failed")) {
         msg = "通信が切断されました。しばらくしてから履歴を確認してください。";
       }
-      setError("アップロードに失敗しました: " + msg);
+      setError("要約に失敗しました: " + msg);
     }
-    setUploading(false);
+    setSubmitting(false);
   };
   return /*#__PURE__*/React.createElement("div", {
     style: {
@@ -1471,7 +1436,7 @@ function HomeScreen({ member }) {
       lineHeight: 1.7,
       marginBottom: 12
     }
-  }, "iPhone純正の「ボイスメモ」アプリで録音し、共有ボタンから「ファイルに保存」した音声ファイルを、下のボタンから選んで送信してください。"), error && /*#__PURE__*/React.createElement("div", {
+  }, "iPhone純正の「ボイスメモ」アプリで録音したら、その録音の文字起こしを開いてコピーし、下の欄に貼り付けてください。"), error && /*#__PURE__*/React.createElement("div", {
     style: {
       background: `${C.red}12`,
       border: `1px solid ${C.red}25`,
@@ -1481,41 +1446,34 @@ function HomeScreen({ member }) {
       fontSize: 12,
       color: C.red
     }
-  }, error), /*#__PURE__*/React.createElement("label", {
+  }, error), /*#__PURE__*/React.createElement("textarea", {
+    value: transcript,
+    onChange: e => setTranscript(e.target.value),
+    placeholder: "ここに文字起こしを貼り付け",
+    rows: 8,
     style: {
-      display: "flex",
-      alignItems: "center",
-      gap: 8,
       width: "100%",
-      padding: "11px 13px",
       background: C.bg,
-      border: `1.5px dashed ${C.sep}`,
+      color: C.text,
+      border: `1.5px solid ${tooLong ? C.red : C.sep}`,
       borderRadius: 10,
-      cursor: "pointer",
-      marginBottom: 10
+      padding: "11px 13px",
+      // iOS Safariは16px未満の入力欄にフォーカスすると画面を拡大してしまうため16pxにする
+      fontSize: 16,
+      lineHeight: 1.6,
+      outline: "none",
+      resize: "vertical",
+      WebkitUserSelect: "text",
+      userSelect: "text"
     }
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: "paperclip",
-    size: 14,
-    color: C.text2
-  }), /*#__PURE__*/React.createElement("span", {
+  }), /*#__PURE__*/React.createElement("p", {
     style: {
-      fontSize: 13,
-      color: file ? C.text : C.text2,
-      flex: 1,
-      overflow: "hidden",
-      textOverflow: "ellipsis",
-      whiteSpace: "nowrap"
+      fontSize: 11,
+      color: tooLong ? C.red : C.text2,
+      textAlign: "right",
+      margin: "4px 2px 10px"
     }
-  }, file ? file.name : "音声ファイルを選択..."), /*#__PURE__*/React.createElement("input", {
-    key: fileInputKey,
-    type: "file",
-    accept: "audio/*,.m4a,.mp3,.wav",
-    onChange: e => setFile(e.target.files[0] || null),
-    style: {
-      display: "none"
-    }
-  })), /*#__PURE__*/React.createElement("input", {
+  }, tooLong ? `${trimmed.length.toLocaleString()}文字（上限${MAX_TRANSCRIPT_CHARS.toLocaleString()}文字を超えています。録音を分けてください）` : `${trimmed.length.toLocaleString()}文字`), /*#__PURE__*/React.createElement("input", {
     type: "text",
     value: interviewee,
     onChange: e => setInterviewee(e.target.value),
@@ -1527,19 +1485,19 @@ function HomeScreen({ member }) {
       border: `1.5px solid ${C.sep}`,
       borderRadius: 10,
       padding: "11px 13px",
-      fontSize: 15,
+      fontSize: 16,
       outline: "none",
       marginBottom: 10,
       WebkitUserSelect: "text",
       userSelect: "text"
     }
   }), /*#__PURE__*/React.createElement("button", {
-    onClick: handleUpload,
-    disabled: uploading || !file,
+    onClick: handleSubmit,
+    disabled: !canSubmit,
     style: {
       width: "100%",
       padding: "11px",
-      background: uploading || !file ? `${C.blue}60` : C.blue,
+      background: canSubmit ? C.blue : `${C.blue}60`,
       color: "#fff",
       border: "none",
       borderRadius: 10,
@@ -1549,18 +1507,18 @@ function HomeScreen({ member }) {
       alignItems: "center",
       justifyContent: "center",
       gap: 7,
-      cursor: uploading || !file ? "default" : "pointer"
+      cursor: canSubmit ? "pointer" : "default"
     }
-  }, uploading ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Ic, {
+  }, submitting ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Ic, {
     n: "spinner",
     size: 14,
     color: "#fff",
     cls: "spin"
-  }), "送信中...") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Ic, {
+  }), "要約中...（10〜20秒ほど）") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Ic, {
     n: "wand-magic-sparkles",
     size: 14,
     color: "#fff"
-  }), "解析・要約を開始"))), recentRec ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
+  }), "要約する"))), recentRec ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       fontWeight: 600,
@@ -1600,7 +1558,7 @@ function HomeScreen({ member }) {
       fontWeight: 500,
       color: C.purple
     }
-  }, recentRec.interviewee), /*#__PURE__*/React.createElement("span", {
+  }, recentRec.interviewee), safeDur(recentRec.duration) && /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 10,
       color: C.text2,
@@ -1971,7 +1929,7 @@ function HistoryScreen({
       fontWeight: 500,
       color: C.purple
     }
-  }, item.interviewee)), /*#__PURE__*/React.createElement("span", {
+  }, item.interviewee)), safeDur(item.duration) && /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 10,
       color: C.text2,
