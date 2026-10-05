@@ -9,7 +9,7 @@
 const SHEET_RECORDS    = "records";
 // 使うモデルは、スクリプトプロパティ GEMINI_MODEL で切り替えられる（コードの書き換えや
 // 再デプロイは不要）。未設定ならこの既定のモデルを使う。
-const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash";
+const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite";
 const GEMINI_API_BASE  = "https://generativelanguage.googleapis.com/v1/models/";
 
 // recordsシートの列定義

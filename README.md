@@ -28,7 +28,7 @@ iPhone純正「ボイスメモ」で録音・文字起こししたテキスト�
 |---|---|
 | `APP_PASSCODE` | 社内共通の合言葉（必須。未設定だと誰も使えない）。12文字以上を推奨 |
 | `GCP_PROJECT_ID` | Geminiの利用枠を付けるGoogle CloudのプロジェクトID（必須） |
-| `GEMINI_MODEL` | 使うモデル（任意。未設定なら `gemini-3.5-flash`） |
+| `GEMINI_MODEL` | 使うモデル（任意。未設定なら `gemini-3.5-flash-lite`） |
 | `NO_FAST_CONFIG_<モデル名>` | GASが自動で書く（そのモデルが高速化の設定を受け付けないことの記録）。消さない |
 
 ## GASの更新手順

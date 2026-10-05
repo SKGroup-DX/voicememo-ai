@@ -16,7 +16,7 @@ URL: https://skgroup-dx.github.io/voicememo-ai/
 
 \- バックエンド: Google Apps Script (GAS)。コードは gas/Code.gs と gas/appsscript.json に置き、Apps Scriptエディタへ貼り付けてデプロイする
 
-\- AI: Gemini API (v1)。APIキーではなくスクリプト所有者のOAuthトークンで呼ぶ（無料枠）。モデルはスクリプトプロパティ GEMINI_MODEL で切り替え（未設定なら gemini-3.5-flash）
+\- AI: Gemini API (v1)。APIキーではなくスクリプト所有者のOAuthトークンで呼ぶ（無料枠）。モデルはスクリプトプロパティ GEMINI_MODEL で切り替え（未設定なら gemini-3.5-flash-lite）
 
 \- データ保存: Google Sheets（recordsシート）
 
