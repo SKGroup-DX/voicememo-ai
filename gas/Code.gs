@@ -10,11 +10,16 @@ const SHEET_RECORDS    = "records";
 const GEMINI_MODEL     = "gemini-3.5-flash";
 const GEMINI_API_BASE  = "https://generativelanguage.googleapis.com/v1/models/";
 
-// スプレッドシート列定義（音声を扱っていた頃の列も、既存のシートと列位置を
-// 合わせるために残している。DRIVE_FILE_ID・DRIVE_ERROR・MIME_TYPEは現在未使用）
-const COL = { ID:1, DATE:2, DURATION:3, MEMBER:4, INTERVIEWEE:5, MEETING_NAME:6, MODE:7, SECTIONS:8, DRIVE_FILE_ID:9, DRIVE_ERROR:10, STATUS:11, PROCESS_ERROR:12, MIME_TYPE:13, SYSTEM_PROMPT:14, PROCESSING_STARTED_AT:15, TRANSCRIPT:16 };
-const NUM_COLS    = 16;
-// STATUS列の値: "queued"(要約待ち) | "processing"(要約中) | "done"(完了) | "error"(失敗)
+// recordsシートの列定義
+const COL = { ID:1, DATE:2, MEMBER:3, INTERVIEWEE:4, STATUS:5, SECTIONS:6, TRANSCRIPT:7, PROCESS_ERROR:8, PROCESSING_STARTED_AT:9 };
+const NUM_COLS    = 9;
+const HEADERS     = ["ID", "日時", "名前", "相手", "状態", "要約", "文字起こし", "エラー", "処理開始時刻"];
+// 状態列の値: "queued"(要約待ち) | "processing"(要約中) | "done"(完了) | "error"(失敗)
+
+// 音声を扱っていた頃の古い列構成（16列）。migrateRecordsSheetでの移行にだけ使う。
+const OLD_COL = { ID:1, DATE:2, MEMBER:4, INTERVIEWEE:5, SECTIONS:8, STATUS:11, PROCESS_ERROR:12, PROCESSING_STARTED_AT:15, TRANSCRIPT:16 };
+const OLD_NUM_COLS = 16;
+const OLD_SHEET_NAMES = ["members", "chunks"]; // 移行時に削除する、使っていないシート
 
 const STALE_PROCESSING_MINUTES = 10; // これ以上"processing"のままの行は実行が異常終了したとみなし再投入する
 const HEADER_ROW  = 1;
@@ -129,7 +134,7 @@ function getHistory(body) {
 }
 
 function searchableText(rec, row) {
-  const parts = [rec.interviewee, rec.meetingName, rowTranscript(row)];
+  const parts = [rec.interviewee, rowTranscript(row)];
   const secs = (rec.sections && rec.sections.sections) || [];
   secs.forEach(s => {
     parts.push(s.label || "");
@@ -144,20 +149,15 @@ function searchableText(rec, row) {
 function getTranscript(body) {
   const id = body.id ? String(body.id) : "";
   if (!id) return { success: false, error: "id required" };
-  const sheet = getOrCreateSheet(SHEET_RECORDS);
+  const sheet = recordsSheet();
   const row = findRecordRowById(sheet, id);
   if (row < 0) return { success: false, error: "Record not found: " + id };
   const values = sheet.getRange(row, 1, 1, NUM_COLS).getValues()[0];
   return { success: true, transcript: rowTranscript(values) };
 }
 
-// 文字起こしはTRANSCRIPT列に入っている。以前の記録は要約(sections)の中の
-// _transcriptにだけ入っていることがあるので、そちらも見る。
 function rowTranscript(row) {
-  const t = String(row[COL.TRANSCRIPT - 1] || "");
-  if (t) return t;
-  const parsed = parseSections(row[COL.SECTIONS - 1]);
-  return (parsed && parsed._transcript) ? String(parsed._transcript) : "";
+  return String(row[COL.TRANSCRIPT - 1] || "");
 }
 
 // ================================================================
@@ -167,8 +167,7 @@ function getRecordStatus(body) {
   const id = body.id ? String(body.id) : "";
   if (!id) return { found: false, error: "id required" };
 
-  const sheet = SS().getSheetByName(SHEET_RECORDS);
-  if (!sheet) return { found: false };
+  const sheet = recordsSheet();
   const targetRow = findRecordRowById(sheet, id);
   if (targetRow < 0) return { found: false };
 
@@ -198,7 +197,7 @@ function submitTranscript(body) {
     return { success: false, error: "文字数が上限（" + MAX_TRANSCRIPT_CHARS + "文字）を超えています" };
   }
 
-  const sheet      = getOrCreateSheet(SHEET_RECORDS);
+  const sheet      = recordsSheet();
   const recordDate = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
   const newId      = Utilities.getUuid();
 
@@ -206,20 +205,13 @@ function submitTranscript(body) {
     sheet.appendRow([
       newId,        // COL.ID
       recordDate,   // COL.DATE
-      "",           // COL.DURATION: テキストからは分からない
       member,       // COL.MEMBER
       interviewee,  // COL.INTERVIEWEE
-      "",           // COL.MEETING_NAME
-      "auto",       // COL.MODE: 1on1か会議かはGeminiが判定する
-      "",           // COL.SECTIONS: まだなし
-      "",           // COL.DRIVE_FILE_ID（未使用）
-      "",           // COL.DRIVE_ERROR（未使用）
       "queued",     // COL.STATUS
+      "",           // COL.SECTIONS: まだなし
+      transcript,   // COL.TRANSCRIPT
       "",           // COL.PROCESS_ERROR
-      "text/plain", // COL.MIME_TYPE（未使用）
-      "",           // COL.SYSTEM_PROMPT: 空なら既定の要約プロンプトを使う
-      "",           // COL.PROCESSING_STARTED_AT
-      transcript    // COL.TRANSCRIPT
+      ""            // COL.PROCESSING_STARTED_AT
     ]);
   });
   console.log("[submitTranscript] 受け付け完了 id:", newId);
@@ -249,7 +241,7 @@ function processRecord(body) {
   }
   try {
     const t0 = Date.now();
-    const sections = callGeminiSummarize(job.transcript, job.systemPrompt, auth, SUMMARIZE_SYNC_MAX_ATTEMPTS, SUMMARIZE_SYNC_RETRY_WAIT_SEC);
+    const sections = callGeminiSummarize(job.transcript, auth, SUMMARIZE_SYNC_MAX_ATTEMPTS, SUMMARIZE_SYNC_RETRY_WAIT_SEC);
     console.log("[processRecord] 要約にかかった時間:", ((Date.now() - t0) / 1000).toFixed(1), "秒 ／ 文字数:", job.transcript.length, "／ 種別:", sections.meetingType || "不明");
     updateRecord({ id, sections, status: "done", processError: "" });
     return { success: true, id, status: "done", sections };
@@ -269,7 +261,7 @@ function claimQueuedRowById(id) {
   } catch (e) {}
   if (!gotLock) return null; // 取れなければ定期実行に任せる
   try {
-    const sheet = getOrCreateSheet(SHEET_RECORDS);
+    const sheet = recordsSheet();
     const row = findRecordRowById(sheet, id);
     if (row < 0) return null;
     const values = sheet.getRange(row, 1, 1, NUM_COLS).getValues()[0];
@@ -278,8 +270,7 @@ function claimQueuedRowById(id) {
     sheet.getRange(row, COL.PROCESSING_STARTED_AT).setValue(new Date());
     return {
       row,
-      transcript: rowTranscript(values),
-      systemPrompt: String(values[COL.SYSTEM_PROMPT - 1] || "")
+      transcript: rowTranscript(values)
     };
   } finally {
     lock.releaseLock();
@@ -315,12 +306,12 @@ function runPendingJobs() {
     return;
   }
 
-  const sheet = getOrCreateSheet(SHEET_RECORDS);
+  const sheet = recordsSheet();
   claimed.forEach(job => {
     try {
       if (!job.transcript) throw new Error("文字起こしテキストがありません");
       console.log("[runPendingJobs] 要約開始 id:", job.id);
-      const sections = callGeminiSummarize(job.transcript, job.systemPrompt, auth);
+      const sections = callGeminiSummarize(job.transcript, auth);
       sheet.getRange(job.row, COL.SECTIONS).setValue(JSON.stringify(sections));
       sheet.getRange(job.row, COL.STATUS).setValue("done");
       sheet.getRange(job.row, COL.PROCESS_ERROR).setValue("");
@@ -346,7 +337,7 @@ function claimQueuedRows() {
     return [];
   }
   try {
-    const sheet = getOrCreateSheet(SHEET_RECORDS);
+    const sheet = recordsSheet();
     const allRows = readAllRows();
     const claimed = [];
     for (let i = 0; i < allRows.length; i++) {
@@ -358,7 +349,6 @@ function claimQueuedRows() {
       claimed.push({
         row: targetRow,
         id: String(row[COL.ID - 1] || ""),
-        systemPrompt: String(row[COL.SYSTEM_PROMPT - 1] || ""),
         transcript: rowTranscript(row)
       });
     }
@@ -371,7 +361,7 @@ function claimQueuedRows() {
 // GCP_PROJECT_ID未設定などで処理を始められなかった場合、"processing"のまま
 // 固まらないよう"queued"に戻して後で再試行できるようにする。
 function revertClaimed(claimed) {
-  const sheet = getOrCreateSheet(SHEET_RECORDS);
+  const sheet = recordsSheet();
   claimed.forEach(job => sheet.getRange(job.row, COL.STATUS).setValue("queued"));
 }
 
@@ -476,10 +466,10 @@ const SUMMARIZE_FAST_CONFIG = {
   thinkingConfig: { thinkingLevel: "low" }
 };
 
-function callGeminiSummarize(transcript, systemPrompt, auth, maxAttempts, retryWaitSec) {
+function callGeminiSummarize(transcript, auth, maxAttempts, retryWaitSec) {
   const url = GEMINI_API_BASE + GEMINI_MODEL + ":generateContent";
 
-  const prompt = (systemPrompt || getDefaultSystemPrompt()) + "\n\n【文字起こし内容】\n" + transcript;
+  const prompt = getDefaultSystemPrompt() + "\n\n【文字起こし内容】\n" + transcript;
   const baseConfig = { temperature: 0.3, maxOutputTokens: 32768 };
   const buildPayload = config => ({
     contents: [{ parts: [{ text: prompt }] }],
@@ -609,18 +599,11 @@ function updateRecord(body) {
 
   // 行の検索と書き込みの間に他の実行が同じ行をいじる余地をなくすため短時間ロックする
   return withShortLock(() => {
-    const sheet = SS().getSheetByName(SHEET_RECORDS);
-    if (!sheet) return { success: false, error: "records sheet not found" };
+    const sheet = recordsSheet();
     const targetRow = findRecordRowById(sheet, id);
     if (targetRow < 0) return { success: false, error: "Record not found: " + id };
 
     if (sections !== undefined && sections !== null) {
-      // 以前の記録は文字起こしが要約の中（_transcript）にしか無いことがある。
-      // 要約を上書きすると消えてしまうので、先にTRANSCRIPT列へ移しておく。
-      if (!String(sheet.getRange(targetRow, COL.TRANSCRIPT).getValue() || "")) {
-        const old = parseSections(sheet.getRange(targetRow, COL.SECTIONS).getValue());
-        if (old && old._transcript) sheet.getRange(targetRow, COL.TRANSCRIPT).setValue(String(old._transcript));
-      }
       sheet.getRange(targetRow, COL.SECTIONS).setValue(JSON.stringify(stripTranscript(sections)));
     }
     if (status !== undefined)       sheet.getRange(targetRow, COL.STATUS).setValue(status);
@@ -639,8 +622,7 @@ function deleteRecord(body) {
 
   // 行の検索と削除の間に他の実行が行番号をずらす（挿入・削除）余地をなくす
   return withShortLock(() => {
-    const sheet = SS().getSheetByName(SHEET_RECORDS);
-    if (!sheet) return { success: false, error: "records sheet not found" };
+    const sheet = recordsSheet();
     const targetRow = findRecordRowById(sheet, id);
     if (targetRow < 0) return { success: false, error: "Record not found: " + id };
     sheet.deleteRow(targetRow);
@@ -666,8 +648,7 @@ function warmup() {
 // 次回の定期実行で拾い直す。
 function reapStaleProcessing() {
   try {
-    const sheet = SS().getSheetByName(SHEET_RECORDS);
-    if (!sheet) return;
+    const sheet = recordsSheet();
     const lastRow = sheet.getLastRow();
     if (lastRow <= HEADER_ROW) return;
 
@@ -700,26 +681,44 @@ function SS() {
   return SpreadsheetApp.getActiveSpreadsheet();
 }
 
-function getOrCreateSheet(name) {
-  let sheet = SS().getSheetByName(name);
+// recordsシートを返す（なければ作る）。古い16列のままなら、読み書きすると
+// 列がずれて記録が壊れるため、migrateRecordsSheetを実行するまでエラーにする。
+let recordsSheetChecked_ = null;
+function recordsSheet() {
+  if (recordsSheetChecked_) return recordsSheetChecked_;
+  let sheet = SS().getSheetByName(SHEET_RECORDS);
   if (!sheet) {
-    sheet = SS().insertSheet(name);
-    if (name === SHEET_RECORDS) {
-      sheet.getRange(1, 1, 1, NUM_COLS).setValues([[
-        "id","date","duration","member","interviewee","meetingName","mode","sections","driveFileId","driveError","status","processError","mimeType","systemPrompt","processingStartedAt","transcript"
-      ]]);
-      sheet.getRange(1, 1, 1, NUM_COLS).setFontWeight("bold").setBackground("#E8EAF6");
-      sheet.setFrozenRows(1);
-      sheet.setColumnWidth(COL.SECTIONS, 400);
-    }
-    SpreadsheetApp.flush();
+    sheet = createRecordsSheet_(SHEET_RECORDS);
+  } else if (isOldLayout_(sheet)) {
+    throw new Error("記録シートの移行が終わっていません。管理者がmigrateRecordsSheetを実行するまでお待ちください。");
   }
+  recordsSheetChecked_ = sheet;
   return sheet;
+}
+
+function createRecordsSheet_(name) {
+  const sheet = SS().insertSheet(name);
+  sheet.getRange(1, 1, 1, NUM_COLS).setValues([HEADERS]);
+  sheet.getRange(1, 1, 1, NUM_COLS).setFontWeight("bold").setBackground("#E8EAF6");
+  sheet.setFrozenRows(1);
+  // 名前〜エラーの文字の列は、数字や日付に自動変換されないよう「書式なしテキスト」にする
+  sheet.getRange(1, COL.MEMBER, sheet.getMaxRows(), COL.PROCESS_ERROR - COL.MEMBER + 1).setNumberFormat("@");
+  sheet.setColumnWidth(COL.ID, 90);
+  sheet.setColumnWidth(COL.DATE, 140);
+  sheet.setColumnWidth(COL.SECTIONS, 400);
+  sheet.setColumnWidth(COL.TRANSCRIPT, 400);
+  SpreadsheetApp.flush();
+  return sheet;
+}
+
+function isOldLayout_(sheet) {
+  return sheet.getLastColumn() >= OLD_NUM_COLS &&
+    String(sheet.getRange(1, OLD_NUM_COLS).getValue()) === "transcript";
 }
 
 // recordsシートの見出しを除く全行（古い順）
 function readAllRows() {
-  const sheet = getOrCreateSheet(SHEET_RECORDS);
+  const sheet = recordsSheet();
   const lastRow = sheet.getLastRow();
   if (lastRow <= HEADER_ROW) return [];
   return sheet.getRange(HEADER_ROW + 1, 1, lastRow - HEADER_ROW, NUM_COLS).getValues();
@@ -757,19 +756,12 @@ function rowToRecord(row) {
     const idVal = row[COL.ID - 1];
     if (!idVal && idVal !== 0) return null;
 
-    // duration の日付変換対策（先頭の ' を除去）
-    let duration = String(row[COL.DURATION - 1] || "");
-    if (duration.startsWith("'")) duration = duration.slice(1);
-
     return {
       id:            String(idVal),
       date:          String(row[COL.DATE - 1] || ""),
-      duration:      duration,
       member:        String(row[COL.MEMBER - 1] || ""),
       interviewee:   String(row[COL.INTERVIEWEE - 1] || ""),
-      meetingName:   String(row[COL.MEETING_NAME - 1] || ""),
-      mode:          String(row[COL.MODE - 1] || ""),
-      sections:      stripTranscript(parseSections(row[COL.SECTIONS - 1])),
+      sections:     stripTranscript(parseSections(row[COL.SECTIONS - 1])),
       hasTranscript: !!rowTranscript(row),
       status:        String(row[COL.STATUS - 1] || ""),
       processError:  String(row[COL.PROCESS_ERROR - 1] || "")
@@ -798,6 +790,74 @@ function setupTriggers() {
   ScriptApp.newTrigger("runPendingJobs").timeBased().everyMinutes(1).create();
   ScriptApp.newTrigger("warmup").timeBased().everyMinutes(5).create();
   console.log("[setupTriggers] 定期実行を設定しました: runPendingJobs（1分おき）, warmup（5分おき）");
+}
+
+// ================================================================
+// 記録シートの移行（Apps Scriptエディタから手動で一度だけ実行）
+// ================================================================
+// 音声を扱っていた頃の16列の records シートを、今使っている9列に作り直す。
+// ・今の records は「records_旧」に名前を変えて残す（中身を確認してから手で削除する）
+// ・要約の中に重複して入っていた文字起こし(_transcript)は「文字起こし」列にまとめる
+// ・使っていない members / chunks シートは削除する
+// 移行済みなら記録には何もしないので、何回実行しても安全。
+function migrateRecordsSheet() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000); // 移行中にアプリからの書き込みが割り込まないようにする
+  try {
+    const ss = SS();
+    const old = ss.getSheetByName(SHEET_RECORDS);
+    if (!old) {
+      recordsSheet();
+      console.log("records シートが無かったので、新しい形で作りました");
+    } else if (!isOldLayout_(old)) {
+      console.log("records シートはすでに新しい形です（記録はそのまま）");
+    } else {
+      const lastRow = old.getLastRow();
+      const values = lastRow > HEADER_ROW ? old.getRange(HEADER_ROW + 1, 1, lastRow - HEADER_ROW, OLD_NUM_COLS).getValues() : [];
+      const rows = values.filter(r => String(r[OLD_COL.ID - 1] || "")).map(r => {
+        const rawSections = r[OLD_COL.SECTIONS - 1];
+        const parsed = parseSections(rawSections);
+        const transcript = String(r[OLD_COL.TRANSCRIPT - 1] || "") ||
+          (parsed && parsed._transcript ? String(parsed._transcript) : "");
+        const sections = parsed ? JSON.stringify(stripTranscript(parsed)) : String(rawSections || "");
+        const row = [];
+        row[COL.ID - 1]                    = r[OLD_COL.ID - 1];
+        row[COL.DATE - 1]                  = r[OLD_COL.DATE - 1];
+        row[COL.MEMBER - 1]                = String(r[OLD_COL.MEMBER - 1] || "");
+        row[COL.INTERVIEWEE - 1]           = String(r[OLD_COL.INTERVIEWEE - 1] || "");
+        row[COL.STATUS - 1]                = String(r[OLD_COL.STATUS - 1] || "");
+        row[COL.SECTIONS - 1]              = sections;
+        row[COL.TRANSCRIPT - 1]            = transcript;
+        row[COL.PROCESS_ERROR - 1]         = String(r[OLD_COL.PROCESS_ERROR - 1] || "");
+        row[COL.PROCESSING_STARTED_AT - 1] = r[OLD_COL.PROCESSING_STARTED_AT - 1];
+        return row;
+      });
+
+      const backupName = uniqueSheetName_(SHEET_RECORDS + "_旧");
+      old.setName(backupName);
+      const sheet = createRecordsSheet_(SHEET_RECORDS);
+      if (rows.length) sheet.getRange(HEADER_ROW + 1, 1, rows.length, NUM_COLS).setValues(rows);
+      ss.setActiveSheet(sheet);
+      ss.moveActiveSheet(1);
+      console.log("✓ records を新しい形に作り直しました（" + rows.length + "件）。元のシートは「" + backupName + "」として残しています");
+    }
+
+    OLD_SHEET_NAMES.forEach(name => {
+      const s = ss.getSheetByName(name);
+      if (s) {
+        ss.deleteSheet(s);
+        console.log("✓ 使っていない「" + name + "」シートを削除しました");
+      }
+    });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function uniqueSheetName_(base) {
+  let name = base;
+  for (let i = 2; SS().getSheetByName(name); i++) name = base + i;
+  return name;
 }
 
 // ================================================================

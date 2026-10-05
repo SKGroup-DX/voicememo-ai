@@ -1806,10 +1806,7 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
         action: "submitTranscript",
         member,
         interviewee: typedName,
-        transcript: trimmed,
-        mode: "auto",
-        duration: "",
-        mimeType: "text/plain"
+        transcript: trimmed
       }, 30000);
       if (!accepted.success) throw new Error(accepted.error || "GASエラー");
     } catch (e) {
@@ -1825,7 +1822,6 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
     setRecentRecs(prev => [{
       id,
       date: new Date().toString(),
-      duration: "",
       member,
       interviewee: typedName,
       status: "queued",
