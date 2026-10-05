@@ -786,6 +786,31 @@ function LoginScreen({
 }
 
 // ── DRAWER ───────────────────────────────────────────────
+const DRAWER_ITEMS = [{
+  key: "home",
+  icon: "house",
+  label: "ホーム",
+  desc: "文字起こしを貼って要約"
+}, {
+  key: "history",
+  icon: "clock-rotate-left",
+  label: "履歴",
+  desc: "過去の要約を見る・探す"
+}, {
+  key: "help",
+  icon: "circle-question",
+  label: "使い方",
+  desc: "操作の手順と注意点"
+}];
+// 画面がおかしい時用。新しいサービスワーカーの確認をしてから読み込み直す
+// （画面本体はネットワーク優先なので、これで最新版が表示される）。
+async function reloadLatest() {
+  try {
+    const r = await navigator.serviceWorker?.getRegistration();
+    await r?.update();
+  } catch {}
+  window.location.reload();
+}
 function Drawer({
   open,
   onClose,
@@ -794,6 +819,10 @@ function Drawer({
   userName,
   current
 }) {
+  const [confirmLogout, setConfirmLogout] = useState(false);
+  useEffect(() => {
+    if (!open) setConfirmLogout(false);
+  }, [open]);
   return /*#__PURE__*/React.createElement(React.Fragment, null, open && /*#__PURE__*/React.createElement("div", {
     onClick: onClose,
     style: {
@@ -819,7 +848,7 @@ function Drawer({
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      padding: "52px 20px 18px",
+      padding: "52px 16px 16px",
       borderBottom: `1px solid ${C.sep}`
     }
   }, /*#__PURE__*/React.createElement("p", {
@@ -827,32 +856,57 @@ function Drawer({
       fontSize: 20,
       fontWeight: 700,
       color: C.text,
-      marginBottom: 3
+      margin: "0 4px 12px"
     }
-  }, "ボイスメモ要約"), userName && /*#__PURE__*/React.createElement("p", {
+  }, "ボイスメモ要約"), userName && /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 13,
-      color: C.blue,
-      fontWeight: 500
+      display: "flex",
+      alignItems: "center",
+      gap: 10,
+      background: C.bg,
+      borderRadius: 12,
+      padding: "10px 12px"
     }
-  }, userName)), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 34,
+      height: 34,
+      borderRadius: "50%",
+      background: `${C.blue}18`,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      flexShrink: 0
+    }
+  }, /*#__PURE__*/React.createElement(Ic, {
+    n: "user",
+    size: 15,
+    color: C.blue
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11,
+      color: C.text2
+    }
+  }, "ログイン中"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 15,
+      fontWeight: 600,
+      color: C.text,
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap"
+    }
+  }, userName)))), /*#__PURE__*/React.createElement("div", {
     style: {
       flex: 1,
-      padding: "8px 0"
+      padding: "8px 0",
+      overflowY: "auto"
     }
-  }, [{
-    key: "home",
-    icon: "house",
-    label: "ホーム"
-  }, {
-    key: "history",
-    icon: "clock-rotate-left",
-    label: "履歴"
-  }, {
-    key: "help",
-    icon: "circle-question",
-    label: "使い方"
-  }].map(item => /*#__PURE__*/React.createElement("button", {
+  }, DRAWER_ITEMS.map(item => /*#__PURE__*/React.createElement("button", {
     key: item.key,
     onClick: () => {
       onNav(item.key);
@@ -860,7 +914,7 @@ function Drawer({
     },
     style: {
       width: "100%",
-      padding: "13px 20px",
+      padding: "11px 20px",
       display: "flex",
       alignItems: "center",
       gap: 14,
@@ -877,46 +931,143 @@ function Drawer({
       background: item.key === current ? `${C.blue}15` : C.bg,
       display: "flex",
       alignItems: "center",
-      justifyContent: "center"
+      justifyContent: "center",
+      flexShrink: 0
     }
   }, /*#__PURE__*/React.createElement(Ic, {
     n: item.icon,
     size: 17,
     color: item.key === current ? C.blue : C.text2
-  })), /*#__PURE__*/React.createElement("span", {
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 16,
-      fontWeight: 500,
-      color: C.text
+      fontWeight: item.key === current ? 600 : 500,
+      color: item.key === current ? C.blue : C.text
     }
-  }, item.label)))), /*#__PURE__*/React.createElement("div", {
+  }, item.label), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.text2,
+      marginTop: 1
+    }
+  }, item.desc))))), /*#__PURE__*/React.createElement("div", {
     style: {
       padding: "12px 16px",
+      paddingBottom: "max(16px, env(safe-area-inset-bottom, 16px))",
       borderTop: `1px solid ${C.sep}`
     }
   }, /*#__PURE__*/React.createElement("button", {
-    onClick: onLogout,
+    onClick: reloadLatest,
     style: {
       width: "100%",
-      padding: "12px 16px",
+      padding: "11px 16px",
+      marginBottom: 8,
+      display: "flex",
+      alignItems: "center",
+      gap: 10,
+      background: "none",
+      border: `1px solid ${C.sep}`,
+      borderRadius: 12,
+      cursor: "pointer",
+      textAlign: "left"
+    }
+  }, /*#__PURE__*/React.createElement(Ic, {
+    n: "rotate-right",
+    size: 15,
+    color: C.text2
+  }), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 14,
+      color: C.text
+    }
+  }, "最新版に更新"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11,
+      color: C.text2
+    }
+  }, "表示がおかしい時に"))), confirmLogout ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: C.bg,
+      borderRadius: 12,
+      padding: "12px"
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 14,
+      fontWeight: 600,
+      color: C.text,
+      marginBottom: 4
+    }
+  }, "ログアウトしますか？"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11,
+      color: C.text2,
+      lineHeight: 1.6,
+      marginBottom: 10
+    }
+  }, "次回はログイン画面の「", userName, " として開始」ですぐ戻れます。"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setConfirmLogout(false),
+    style: {
+      flex: 1,
+      padding: "9px 0",
+      borderRadius: 10,
+      background: C.surface,
+      border: `1px solid ${C.sep}`,
+      fontSize: 14,
+      color: C.text,
+      cursor: "pointer"
+    }
+  }, "キャンセル"), /*#__PURE__*/React.createElement("button", {
+    onClick: onLogout,
+    style: {
+      flex: 1,
+      padding: "9px 0",
+      borderRadius: 10,
+      background: C.red,
+      border: "none",
+      fontSize: 14,
+      fontWeight: 600,
+      color: "#fff",
+      cursor: "pointer"
+    }
+  }, "ログアウト"))) : /*#__PURE__*/React.createElement("button", {
+    onClick: () => setConfirmLogout(true),
+    style: {
+      width: "100%",
+      padding: "11px 16px",
       display: "flex",
       alignItems: "center",
       gap: 10,
       background: C.bg,
       border: "none",
       borderRadius: 12,
-      cursor: "pointer"
+      cursor: "pointer",
+      textAlign: "left"
     }
   }, /*#__PURE__*/React.createElement(Ic, {
     n: "lock",
-    size: 16,
+    size: 15,
     color: C.text2
-  }), /*#__PURE__*/React.createElement("span", {
+  }), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
     style: {
-      fontSize: 15,
+      fontSize: 14,
+      color: C.text
+    }
+  }, "ログアウト"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11,
       color: C.text2
     }
-  }, "ログアウト")))));
+  }, "別の名前に切り替える時に"))))));
 }
 
 // ── SUMMARY MODAL ─────────────────────────────────────────
@@ -2567,6 +2718,8 @@ function App() {
     setAuthed(false);
     setCurrentUser({});
     setMember("");
+    setDrawerOpen(false);
+    setScreen("home");
   };
   const handleNav = k => {
     setScreen(k);
