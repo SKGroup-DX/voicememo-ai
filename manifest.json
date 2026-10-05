@@ -1,7 +1,7 @@
 {
-  "name": "VoiceMemo AI",
-  "short_name": "VoiceMemo",
-  "description": "AI搭載 音声録音・文字起こし・要約アプリ",
+  "name": "ボイスメモ要約",
+  "short_name": "ボイスメモ要約",
+  "description": "iPhoneのボイスメモの文字起こしから、1on1・会議の要約を作るアプリ",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

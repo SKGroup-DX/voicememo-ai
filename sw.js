@@ -1,7 +1,7 @@
 // VoiceMemo AI - Service Worker
 // キャッシュ戦略: 画面本体(HTML)はネットワーク優先、アイコン等はキャッシュ優先
 
-const CACHE_NAME = 'voicememo-ai-v8';
+const CACHE_NAME = 'voicememo-ai-v9';
 
 // キャッシュするアセット
 const ASSETS = [
