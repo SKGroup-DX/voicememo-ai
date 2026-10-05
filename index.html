@@ -334,7 +334,9 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
 })();
 </script>
 <script>const SVG_ICONS = {
-  "check": ["0 0 448 512", "<path d=\"M434.8 70.1c14.3 10.4 17.5 30.4 7.1 44.7l-256 352c-5.5 7.6-14 12.3-23.4 13.1s-18.5-2.7-25.1-9.3l-128-128c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l101.5 101.5 234-321.7c10.4-14.3 30.4-17.5 44.7-7.1z\"/>"],
+  "house": ["0 0 576 512", "<path d=\"M575.8 255.5c0 18-15 32.1-32 32.1h-32l.7 160.2c0 2.7-.2 5.4-.5 8.1V472c0 22.1-17.9 40-40 40H456c-1.1 0-2.2 0-3.3-.1c-1.4 .1-2.8 .1-4.2 .1H416 392c-22.1 0-40-17.9-40-40V448 384c0-17.7-14.3-32-32-32H256c-17.7 0-32 14.3-32 32v64 24c0 22.1-17.9 40-40 40H160 128.1c-1.5 0-3-.1-4.5-.2c-1.2 .1-2.4 .2-3.6 .2H104c-22.1 0-40-17.9-40-40V360c0-.9 0-1.9 .1-2.8V287.6H32c-18 0-32-14-32-32.1c0-9 3-17 10-24L266.4 8c7-7 15-8 22-8s15 2 21 7L564.8 231.5c8 7 12 15 11 24z\"/>"],
+  "circle-question": ["0 0 512 512", "<path d=\"M256 512A256 256 0 1 0 256 0a256 256 0 1 0 0 512zM169.8 165.3c7.9-22.3 29.1-37.3 52.8-37.3h58.3c34.9 0 63.1 28.3 63.1 63.1c0 22.6-12.1 43.5-31.7 54.8L280 264.4c-.2 13-10.9 23.6-24 23.6c-13.3 0-24-10.7-24-24V250.5c0-8.6 4.6-16.5 12.1-20.8l44.3-25.4c4.7-2.7 7.6-7.7 7.6-13.1c0-8.4-6.8-15.1-15.1-15.1H222.6c-3.4 0-6.4 2.1-7.5 5.3l-.4 1.2c-4.4 12.5-18.2 19-30.6 14.6s-19-18.2-14.6-30.6l.4-1.2zM224 352a32 32 0 1 1 64 0 32 32 0 1 1 -64 0z\"/>"],
+  "check":["0 0 448 512", "<path d=\"M434.8 70.1c14.3 10.4 17.5 30.4 7.1 44.7l-256 352c-5.5 7.6-14 12.3-23.4 13.1s-18.5-2.7-25.1-9.3l-128-128c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l101.5 101.5 234-321.7c10.4-14.3 30.4-17.5 44.7-7.1z\"/>"],
   "chevron-down": ["0 0 448 512", "<path d=\"M201.4 406.6c12.5 12.5 32.8 12.5 45.3 0l192-192c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L224 338.7 54.6 169.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3l192 192z\"/>"],
   "chevron-right": ["0 0 320 512", "<path d=\"M311.1 233.4c12.5 12.5 12.5 32.8 0 45.3l-192 192c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L243.2 256 73.9 86.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l192 192z\"/>"],
   "chevron-up": ["0 0 448 512", "<path d=\"M201.4 105.4c12.5-12.5 32.8-12.5 45.3 0l192 192c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L224 173.3 54.6 342.6c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3l192-192z\"/>"],
@@ -698,7 +700,8 @@ function Drawer({
   onClose,
   onNav,
   onLogout,
-  userName
+  userName,
+  current
 }) {
   return /*#__PURE__*/React.createElement(React.Fragment, null, open && /*#__PURE__*/React.createElement("div", {
     onClick: onClose,
@@ -754,6 +757,10 @@ function Drawer({
     key: "history",
     icon: "clock-rotate-left",
     label: "履歴"
+  }, {
+    key: "help",
+    icon: "circle-question",
+    label: "使い方"
   }].map(item => /*#__PURE__*/React.createElement("button", {
     key: item.key,
     onClick: () => {
@@ -776,7 +783,7 @@ function Drawer({
       width: 38,
       height: 38,
       borderRadius: 10,
-      background: item.key === "home" ? `${C.red}15` : C.bg,
+      background: item.key === current ? `${C.blue}15` : C.bg,
       display: "flex",
       alignItems: "center",
       justifyContent: "center"
@@ -784,7 +791,7 @@ function Drawer({
   }, /*#__PURE__*/React.createElement(Ic, {
     n: item.icon,
     size: 17,
-    color: item.key === "home" ? C.red : C.text2
+    color: item.key === current ? C.blue : C.text2
   })), /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 16,
@@ -1310,7 +1317,7 @@ function SummaryModal({
 // AIによる文字起こしをやめたことで、要約は送信したその場で返ってくる。
 // スプレッドシートのセルの上限（5万文字）に、文字起こし本文と要約を合わせて収めるための上限。
 const MAX_TRANSCRIPT_CHARS = 30000;
-function HomeScreen({ member }) {
+function HomeScreen({ member, onShowHelp }) {
   const [selectedRec, setSelectedRec] = useState(null);
   const [recentRec, setRecentRec] = useState(null);
   const [transcript, setTranscript] = useState("");
@@ -1444,15 +1451,30 @@ function HomeScreen({ member }) {
       padding: "16px",
       marginBottom: 16
     }
-  }, /*#__PURE__*/React.createElement("p", {
+  }, /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 13,
-      color: C.text2,
-      lineHeight: 1.7,
-      marginBottom: 12,
-      whiteSpace: "pre-line"
+      display: "flex",
+      justifyContent: "flex-end",
+      marginBottom: 8
     }
-  }, "1. iPhone純正の「ボイスメモ」で録音する\n2. 録音を開いて「文字起こしを表示」→「文字起こしをコピー」\n　※一覧から直接コピーすると、うまくコピーされないことがあります\n3. 下のボタンで貼り付けて「要約する」"), error && /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onShowHelp,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 4,
+      fontSize: 12,
+      color: C.text2,
+      background: "none",
+      border: "none",
+      cursor: "pointer",
+      padding: 2
+    }
+  }, /*#__PURE__*/React.createElement(Ic, {
+    n: "circle-question",
+    size: 12,
+    color: C.text2
+  }), "使い方")), error && /*#__PURE__*/React.createElement("div", {
     style: {
       background: `${C.red}12`,
       border: `1px solid ${C.red}25`,
@@ -1656,6 +1678,113 @@ function HomeScreen({ member }) {
       sections: secs
     }))
   }));
+}
+
+// ── HELP SCREEN ──────────────────────────────────────────
+const HELP_STEPS = [{
+  title: "録音する",
+  body: "iPhone純正の「ボイスメモ」アプリで録音します。"
+}, {
+  title: "文字起こしをコピーする",
+  body: "録音を開いて「文字起こしを表示」→「文字起こしをコピー」を押します。",
+  note: "録音の一覧から直接「文字起こしをコピー」すると、うまくコピーされないことがあります。"
+}, {
+  title: "貼り付けて要約する",
+  body: "ホーム画面の「クリップボードから貼り付け」を押し（または欄を長押しして「ペースト」）、「要約する」を押します。10〜20秒ほどで要約が表示されます。"
+}, {
+  title: "見返す",
+  body: "要約は「履歴」に自動で保存されます。キーワードや名前で検索したり、要約を編集・コピーしたりできます。"
+}];
+const HELP_TIPS = ["1on1か複数人の会議かはAIが自動で判定し、それぞれに合った形式で要約します。", "「相手・参加者」の入力は任意です。入れておくと履歴で探しやすくなります。", "混み合っていて時間がかかった場合は、処理が終わり次第ホーム画面と履歴に反映されます。失敗した場合は、履歴の再試行ボタンでやり直せます。", "1回に貼り付けられるのは3万文字（会話でおよそ1時間半〜2時間分）までです。長い場合は録音を分けてください。"];
+function HelpScreen() {
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      height: "100%",
+      overflowY: "auto",
+      WebkitOverflowScrolling: "touch",
+      padding: "12px 16px 24px"
+    }
+  }, /*#__PURE__*/React.createElement("h2", {
+    style: {
+      fontSize: 20,
+      fontWeight: 700,
+      color: C.text,
+      marginBottom: 12
+    }
+  }, "使い方"), HELP_STEPS.map((s, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      display: "flex",
+      gap: 12,
+      background: C.surface,
+      borderRadius: 14,
+      border: `1px solid ${C.sep}`,
+      padding: "14px",
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 26,
+      height: 26,
+      borderRadius: "50%",
+      background: C.blue,
+      color: "#fff",
+      fontSize: 13,
+      fontWeight: 700,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      flexShrink: 0
+    }
+  }, i + 1), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 15,
+      fontWeight: 600,
+      color: C.text,
+      marginBottom: 4
+    }
+  }, s.title), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 13,
+      color: C.text2,
+      lineHeight: 1.7
+    }
+  }, s.body), s.note && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.orange,
+      lineHeight: 1.6,
+      marginTop: 6
+    }
+  }, "※", s.note)))), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 13,
+      fontWeight: 600,
+      color: C.text2,
+      margin: "18px 2px 8px"
+    }
+  }, "知っておくと便利なこと"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: C.surface,
+      borderRadius: 14,
+      border: `1px solid ${C.sep}`,
+      padding: "6px 14px"
+    }
+  }, HELP_TIPS.map((t, i) => /*#__PURE__*/React.createElement("p", {
+    key: i,
+    style: {
+      fontSize: 13,
+      color: C.text,
+      lineHeight: 1.7,
+      padding: "8px 0",
+      borderBottom: i < HELP_TIPS.length - 1 ? `1px solid ${C.sep}` : "none"
+    }
+  }, t))));
 }
 
 // ── HISTORY SCREEN ────────────────────────────────────────
@@ -2197,7 +2326,7 @@ function App() {
     setMember("");
   };
   const handleNav = k => {
-    setScreen(k === "home" ? "home" : "history");
+    setScreen(k);
   };
   if (!authed) return /*#__PURE__*/React.createElement("div", {
     style: {
@@ -2224,7 +2353,8 @@ function App() {
     onClose: () => setDrawerOpen(false),
     onNav: handleNav,
     onLogout: handleLogout,
-    userName: currentUser?.name || ""
+    userName: currentUser?.name || "",
+    current: screen
   }), /*#__PURE__*/React.createElement("div", {
     style: {
       flexShrink: 0,
@@ -2320,8 +2450,9 @@ function App() {
       flexDirection: "column"
     }
   }, screen === "home" ? /*#__PURE__*/React.createElement(HomeScreen, {
-    member: member
-  }) : /*#__PURE__*/React.createElement(HistoryScreen, {
+    member: member,
+    onShowHelp: () => setScreen("help")
+  }) : screen === "help" ? /*#__PURE__*/React.createElement(HelpScreen, null) : /*#__PURE__*/React.createElement(HistoryScreen, {
     memberFilter: currentUser?.name || ""
   })));
 }
