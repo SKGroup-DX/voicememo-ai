@@ -522,13 +522,13 @@ function dayGroupLabel(s) {
   if (diff < 7) return "過去7日間";
   return `${d.getFullYear()}年${d.getMonth() + 1}月`;
 }
-// 見出しで日付が分かるので、今日・昨日のカードは時刻だけにする
-function cardTime(s) {
+// 要約（JSONで表せるデータ）の複製。structuredClone は iOS 15.3 以前に無いため使わない
+// 履歴の行の右端に出す日時。見出しで日付が分かるので、今日・昨日は時刻、それより前は月/日だけ
+function rowTime(s) {
   const d = parseRecDate(s);
   if (!d) return "";
-  return daysAgo(d) <= 1 ? hhmm(d) : `${d.getMonth() + 1}/${d.getDate()} ${hhmm(d)}`;
+  return daysAgo(d) <= 1 ? hhmm(d) : `${d.getMonth() + 1}/${d.getDate()}`;
 }
-// 要約（JSONで表せるデータ）の複製。structuredClone は iOS 15.3 以前に無いため使わない
 function deepCopy(v) {
   return v == null ? v : JSON.parse(JSON.stringify(v));
 }
@@ -2938,6 +2938,28 @@ function HistoryScreen({
   };
 
   const isFiltering = !!searchQ || typeFilter !== "all";
+  // 日付のまとまり（今日・昨日・過去7日間・◯年◯月）ごとに、1つの枠の中へ行を並べる
+  const groups = [];
+  records.forEach(item => {
+    const label = dayGroupLabel(item.date);
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) last.items.push(item);else groups.push({
+      label,
+      items: [item]
+    });
+  });
+  const groupBox = {
+    background: C.surface,
+    borderRadius: 12,
+    border: `1px solid ${C.sep}`,
+    overflow: "hidden"
+  };
+  const groupLabel = first => ({
+    fontSize: 12,
+    fontWeight: 600,
+    color: C.text2,
+    margin: first ? "4px 4px 6px" : "18px 4px 6px"
+  });
   return /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
@@ -2947,61 +2969,39 @@ function HistoryScreen({
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      padding: "12px 16px 0",
+      padding: "16px 16px 10px",
       flexShrink: 0
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       alignItems: "center",
-      justifyContent: "space-between",
+      gap: 8,
       marginBottom: 12
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      alignItems: "center",
-      gap: 10
     }
   }, /*#__PURE__*/React.createElement("h2", {
     style: {
-      fontSize: 20,
+      fontSize: 22,
       fontWeight: 700,
       color: C.text
     }
-  }, "履歴"), !loading && total > 0 && /*#__PURE__*/React.createElement("span", {
+  }, "履歴"), refreshing && /*#__PURE__*/React.createElement(Ic, {
+    // 保存してある一覧を出している間に、裏で最新を確認していることを示す
+    n: "spinner",
+    size: 13,
+    color: C.text2,
+    cls: "spin"
+  })), /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 12,
-      color: C.text2,
-      background: C.bg,
-      padding: "2px 8px",
-      borderRadius: 12
-    }
-  }, isFiltering ? "該当" : "全", total, "件")), /*#__PURE__*/React.createElement("button", {
-    onClick: fetchFirst,
-    disabled: loading || refreshing,
-    "aria-label": refreshing ? "最新の履歴を確認中" : "履歴を更新",
-    style: {
-      width: 34,
-      height: 34,
-      borderRadius: "50%",
-      background: C.bg,
-      border: "none",
-      cursor: "pointer",
       display: "flex",
       alignItems: "center",
-      justifyContent: "center"
+      gap: 8
     }
-  }, /*#__PURE__*/React.createElement(Ic, {
-    // 保存してある一覧を出している間に、裏で最新を確認していることを回転で示す
-    n: refreshing ? "spinner" : "rotate-right",
-    size: 14,
-    color: refreshing ? C.blue : C.text2,
-    cls: refreshing ? "spin" : ""
-  }))), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
-      marginBottom: 12
+      flex: 1,
+      minWidth: 0
     }
   }, /*#__PURE__*/React.createElement(Ic, {
     n: "magnifying-glass",
@@ -3017,14 +3017,16 @@ function HistoryScreen({
     type: "text",
     value: q,
     onChange: e => setQ(e.target.value),
-    placeholder: "キーワード・名前で検索...",
+    placeholder: "検索",
+    "aria-label": "キーワード・名前で検索",
     style: {
       width: "100%",
-      background: C.bg,
+      background: C.surface,
       border: `1px solid ${C.sep}`,
       borderRadius: 10,
-      padding: "9px 32px",
-      fontSize: 14,
+      padding: "8px 30px 8px 32px",
+      // iOS Safariは16px未満の入力欄にフォーカスすると画面を拡大してしまうため16pxにする
+      fontSize: 16,
       color: C.text,
       outline: "none",
       WebkitUserSelect: "text",
@@ -3035,7 +3037,7 @@ function HistoryScreen({
     onClick: () => setQ(""),
     style: {
       position: "absolute",
-      right: 9,
+      right: 8,
       top: "50%",
       transform: "translateY(-50%)",
       background: "none",
@@ -3048,176 +3050,165 @@ function HistoryScreen({
     size: 13,
     color: C.text2
   }))), /*#__PURE__*/React.createElement("div", {
+    // 種類の絞り込み（全て／1on1／会議）。検索欄の横に小さくまとめる
+    role: "group",
+    "aria-label": "種類で絞り込む",
     style: {
       display: "flex",
-      gap: 6,
-      marginBottom: 10
+      flexShrink: 0,
+      background: C.bg,
+      border: `1px solid ${C.sep}`,
+      borderRadius: 10,
+      padding: 2
     }
-  }, [["all", "すべて"], ["1on1", "1on1"], ["group", "会議"]].map(([key, label]) => /*#__PURE__*/React.createElement("button", {
+  }, [["all", "全て"], ["1on1", "1on1"], ["group", "会議"]].map(([key, label]) => /*#__PURE__*/React.createElement("button", {
     key: key,
     onClick: () => setTypeFilter(key),
+    "aria-pressed": typeFilter === key,
     style: {
-      padding: "6px 14px",
-      borderRadius: 16,
+      padding: "5px 9px",
+      borderRadius: 8,
       fontSize: 13,
-      fontWeight: 600,
-      border: `1px solid ${typeFilter === key ? C.blue : C.sep}`,
-      background: typeFilter === key ? C.blue : C.surface,
-      color: typeFilter === key ? "#fff" : C.text2,
+      fontWeight: typeFilter === key ? 600 : 400,
+      border: "none",
+      background: typeFilter === key ? C.surface : "transparent",
+      boxShadow: typeFilter === key ? "0 1px 2px rgba(0,0,0,.1)" : "none",
+      color: typeFilter === key ? C.text : C.text2,
       cursor: "pointer"
     }
-  }, label)))), /*#__PURE__*/React.createElement("div", {
+  }, label))))), /*#__PURE__*/React.createElement("div", {
     style: {
       flex: 1,
       overflowY: "auto",
-      padding: "0 16px calc(24px + env(safe-area-inset-bottom))"
+      padding: "4px 16px calc(24px + env(safe-area-inset-bottom))"
     }
   }, error && /*#__PURE__*/React.createElement("div", {
     style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
       background: `${C.red}12`,
       border: `1px solid ${C.red}25`,
       borderRadius: 10,
-      padding: "10px 12px",
+      padding: "9px 12px",
       marginBottom: 10,
       fontSize: 13,
       color: C.red
     }
-  }, error), loading && [1, 2, 3].map(i => /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }, error), /*#__PURE__*/React.createElement("button", {
+    onClick: fetchFirst,
+    style: {
+      fontSize: 13,
+      fontWeight: 600,
+      color: C.blue,
+      background: "none",
+      border: "none",
+      cursor: "pointer",
+      flexShrink: 0
+    }
+  }, "再読み込み")), loading && /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...groupBox,
+      marginTop: 4
+    }
+  }, [1, 2, 3, 4].map(i => /*#__PURE__*/React.createElement("div", {
     key: i,
     style: {
-      background: C.surface,
-      borderRadius: 14,
-      height: 80,
-      marginBottom: 10,
-      border: `1px solid ${C.sep}`,
-      overflow: "hidden"
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      background: `linear-gradient(90deg,${C.bg} 25%,rgba(0,0,0,.04) 50%,${C.bg} 75%)`,
+      height: 58,
+      borderTop: i > 1 ? `1px solid ${C.sep}` : "none",
+      background: `linear-gradient(90deg,${C.surface} 25%,rgba(0,0,0,.04) 50%,${C.surface} 75%)`,
       backgroundSize: "400px 100%",
-      height: "100%",
       animation: "shimmer 1.4s ease-in-out infinite"
     }
-  }))), !loading && records.length === 0 && /*#__PURE__*/React.createElement("div", {
+  }))), !loading && records.length === 0 && /*#__PURE__*/React.createElement("p", {
     style: {
       textAlign: "center",
       paddingTop: 48,
+      fontSize: 14,
       color: C.text2
     }
+  }, isFiltering ? "該当する記録がありません" : "まだ記録がありません"), !loading && groups.map((g, gi) => /*#__PURE__*/React.createElement(React.Fragment, {
+    key: g.label + gi
   }, /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 14
-    }
-  }, isFiltering ? "該当する記録がありません" : "まだ記録がありません")), !loading && records.map((item, idx) => {
-    const group = dayGroupLabel(item.date);
-    const showHeader = idx === 0 || dayGroupLabel(records[idx - 1].date) !== group;
+    style: groupLabel(gi === 0)
+  }, g.label), /*#__PURE__*/React.createElement("div", {
+    style: groupBox
+  }, g.items.map((item, ii) => {
     const isError = item.status === "error";
     const isPending = ["queued", "processing"].includes(item.status);
-    return /*#__PURE__*/React.createElement(React.Fragment, {
-      key: item.id
-    }, showHeader && /*#__PURE__*/React.createElement("p", {
+    const kind = item.sections?.meetingType === "group" ? "会議" : item.sections?.meetingType === "1on1" ? "1on1" : "";
+    const retrying = retryingIds.has(item.id);
+    return /*#__PURE__*/React.createElement("div", {
+      key: item.id,
       style: {
-        fontSize: 12,
-        fontWeight: 600,
-        color: C.text2,
-        margin: idx === 0 ? "2px 4px 8px" : "18px 4px 8px"
-      }
-    }, group), /*#__PURE__*/React.createElement("div", {
-      style: {
-        background: C.surface,
-        borderRadius: 14,
-        border: `1px solid ${C.sep}`,
-        boxShadow: "0 1px 3px rgba(0,0,0,.04)",
         display: "flex",
-        alignItems: "stretch",
-        marginBottom: 8
+        alignItems: "center",
+        borderTop: ii > 0 ? `1px solid ${C.sep}` : "none"
       }
     }, /*#__PURE__*/React.createElement("button", {
       onClick: () => setSelected(item),
       style: {
         flex: 1,
-        padding: "12px 14px",
+        minWidth: 0,
+        padding: "10px 14px",
         textAlign: "left",
-        cursor: "pointer",
         background: "none",
         border: "none",
-        minWidth: 0,
-        display: "flex",
-        alignItems: "center",
-        gap: 10
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        flex: 1,
-        minWidth: 0
+        cursor: "pointer"
       }
     }, /*#__PURE__*/React.createElement("div", {
       style: {
         display: "flex",
-        alignItems: "center",
-        gap: 6,
-        marginBottom: 4
+        alignItems: "baseline",
+        gap: 8,
+        marginBottom: 2
       }
-    }, /*#__PURE__*/React.createElement(TypeBadge, {
-      type: item.sections?.meetingType
-    }), /*#__PURE__*/React.createElement("span", {
+    }, /*#__PURE__*/React.createElement("span", {
       style: {
         fontSize: 15,
         fontWeight: 600,
-        color: item.interviewee ? C.text : C.text2,
+        color: C.text,
         overflow: "hidden",
         textOverflow: "ellipsis",
         whiteSpace: "nowrap",
         minWidth: 0
       }
-    }, item.interviewee || "相手未入力"), /*#__PURE__*/React.createElement("span", {
+    }, item.interviewee || (kind === "会議" ? "会議" : "面談")), /*#__PURE__*/React.createElement("span", {
       style: {
-        fontSize: 11,
+        fontSize: 12,
         color: C.text2,
         marginLeft: "auto",
         flexShrink: 0
       }
-    }, cardTime(item.date))), /*#__PURE__*/React.createElement("p", {
+    }, rowTime(item.date))), /*#__PURE__*/React.createElement("p", {
       style: {
-        fontSize: 12,
+        fontSize: 13,
         color: isError ? C.red : C.text2,
         whiteSpace: "nowrap",
         overflow: "hidden",
         textOverflow: "ellipsis"
       }
-    }, isError ? "処理に失敗しました: " + (item.processError || "不明なエラー") : isPending ? "AI処理中..." : item.sections?.sections?.[0]?.items?.[0] || "")), !isError && /*#__PURE__*/React.createElement(Ic, {
-      n: "chevron-right",
-      size: 12,
-      color: C.text2
-    })), isError && /*#__PURE__*/React.createElement("button", {
+    }, isError ? "要約できませんでした" : isPending ? "要約中…" : [kind, item.sections?.sections?.[0]?.items?.[0] || ""].filter(Boolean).join(" · "))), isError && /*#__PURE__*/React.createElement("button", {
       onClick: () => doRetry(item),
-      disabled: retryingIds.has(item.id),
+      disabled: retrying,
       style: {
-        padding: "0 14px",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 3,
-        background: "none",
-        border: "none",
-        cursor: retryingIds.has(item.id) ? "default" : "pointer",
         flexShrink: 0,
-        borderLeft: `1px solid ${C.sep}`
+        marginRight: 12,
+        padding: "6px 10px",
+        borderRadius: 8,
+        border: `1px solid ${C.sep}`,
+        background: C.surface,
+        fontSize: 13,
+        fontWeight: 600,
+        color: C.blue,
+        cursor: retrying ? "default" : "pointer"
       }
-    }, /*#__PURE__*/React.createElement(Ic, {
-      n: retryingIds.has(item.id) ? "spinner" : "rotate-right",
-      size: 14,
-      color: C.purple,
-      cls: retryingIds.has(item.id) ? "spin" : ""
-    }), /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 10,
-        color: C.purple
-      }
-    }, "再試行"))));
-  }), /*#__PURE__*/React.createElement("div", {
+    }, retrying ? "送信中…" : "再試行"));
+  })))), /*#__PURE__*/React.createElement("div", {
     ref: sentinelRef,
     style: {
       height: 1
@@ -3226,28 +3217,19 @@ function HistoryScreen({
     style: {
       display: "flex",
       justifyContent: "center",
-      padding: "14px 0",
-      gap: 7,
-      color: C.text2,
-      fontSize: 13
+      padding: "14px 0"
     }
   }, /*#__PURE__*/React.createElement(Ic, {
     n: "spinner",
-    size: 13,
+    size: 14,
     color: C.text2,
     cls: "spin"
-  }), "読み込み中..."), moreError && !moreLoading && /*#__PURE__*/React.createElement("div", {
+  })), moreError && !moreLoading && /*#__PURE__*/React.createElement("div", {
     style: {
       textAlign: "center",
       padding: "12px 0"
     }
-  }, /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 12,
-      color: C.red,
-      marginBottom: 8
-    }
-  }, "続きを読み込めませんでした"), /*#__PURE__*/React.createElement("button", {
+  }, /*#__PURE__*/React.createElement("button", {
     onClick: fetchMore,
     style: {
       padding: "7px 16px",
@@ -3258,14 +3240,7 @@ function HistoryScreen({
       color: C.blue,
       cursor: "pointer"
     }
-  }, "もう一度読み込む")), !hasMore && records.length > 0 && !isFiltering && /*#__PURE__*/React.createElement("p", {
-    style: {
-      textAlign: "center",
-      fontSize: 12,
-      color: C.text2,
-      padding: "10px 0"
-    }
-  }, "全", total, "件を表示しています")), delTarget && /*#__PURE__*/React.createElement(DeleteConfirm, {
+  }, "続きを読み込む"))),delTarget && /*#__PURE__*/React.createElement(DeleteConfirm, {
     target: delTarget,
     onCancel: () => setDelTarget(null),
     onDeleted: id => {
