@@ -7,8 +7,14 @@
 // 保存する（このリポジトリは公開されているため）。
 
 const SHEET_RECORDS    = "records";
-const GEMINI_MODEL     = "gemini-3.5-flash";
+// 使うモデルは、スクリプトプロパティ GEMINI_MODEL で切り替えられる（コードの書き換えや
+// 再デプロイは不要）。未設定ならこの既定のモデルを使う。
+const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash";
 const GEMINI_API_BASE  = "https://generativelanguage.googleapis.com/v1/models/";
+
+function geminiModel() {
+  return String(PropertiesService.getScriptProperties().getProperty("GEMINI_MODEL") || "").trim() || DEFAULT_GEMINI_MODEL;
+}
 
 // recordsシートの列定義
 const COL = { ID:1, DATE:2, MEMBER:3, INTERVIEWEE:4, STATUS:5, SECTIONS:6, TRANSCRIPT:7, PROCESS_ERROR:8, PROCESSING_STARTED_AT:9 };
@@ -508,7 +514,7 @@ const SUMMARIZE_FAST_CONFIG = {
 };
 
 function callGeminiSummarize(transcript, auth, policy) {
-  const url = GEMINI_API_BASE + GEMINI_MODEL + ":generateContent";
+  const url = GEMINI_API_BASE + geminiModel() + ":generateContent";
 
   const prompt = getDefaultSystemPrompt() + "\n\n【文字起こし内容】\n" + transcript;
   const baseConfig = { temperature: 0.3, maxOutputTokens: 32768 };
@@ -904,7 +910,7 @@ function uniqueSheetName_(base) {
 // ================================================================
 // Gemini接続の診断（Apps Scriptエディタから手動実行）
 // ================================================================
-// 実際に使っているモデル（GEMINI_MODEL）に短い文章を送り、成功するか確認する。
+// 実際に使っているモデル（geminiModel()）に短い文章を送り、成功するか確認する。
 function testGeminiModel() {
   let auth;
   try {
@@ -915,20 +921,52 @@ function testGeminiModel() {
   }
   console.log("利用プロジェクト:", auth.projectId);
 
-  const url = GEMINI_API_BASE + GEMINI_MODEL + ":generateContent";
+  const url = GEMINI_API_BASE + geminiModel() + ":generateContent";
   const payload = { contents: [{ parts: [{ text: "日本語でこんにちはと返してください。" }] }] };
   try {
     const res = UrlFetchApp.fetch(url, makeOptions(payload, auth));
     const code = res.getResponseCode();
     const data = JSON.parse(res.getContentText());
     if (code === 200 && data.candidates) {
-      console.log("✓ OK:", GEMINI_MODEL, "→", data.candidates[0].content.parts[0].text.slice(0, 30));
+      console.log("✓ OK:", geminiModel(), "→", data.candidates[0].content.parts[0].text.slice(0, 30));
     } else {
-      console.log("✗ NG:", GEMINI_MODEL, "→", code, data.error ? data.error.status + " / " + data.error.message : res.getContentText().slice(0, 300));
+      console.log("✗ NG:", geminiModel(), "→", code, data.error ? data.error.status + " / " + data.error.message : res.getContentText().slice(0, 300));
     }
   } catch (e) {
-    console.log("✗ ERR:", GEMINI_MODEL, "→", e.message);
+    console.log("✗ ERR:", geminiModel(), "→", e.message);
   }
+}
+
+// ================================================================
+// 使えるモデルの一覧（Apps Scriptエディタから手動実行）
+// ================================================================
+// 要約に使える（generateContentに対応した）モデルを表示する。軽量版（lite）を先に出す。
+// 一覧の取得は要約の回数には数えられない。
+function listGeminiModels() {
+  let auth;
+  try {
+    auth = getGeminiAuth();
+  } catch (e) {
+    console.log("✗ 設定エラー:", e.message);
+    return;
+  }
+  console.log("今使っているモデル:", geminiModel());
+  const res = UrlFetchApp.fetch("https://generativelanguage.googleapis.com/v1/models?pageSize=200", {
+    muteHttpExceptions: true,
+    headers: geminiHeaders(auth)
+  });
+  if (res.getResponseCode() !== 200) {
+    console.log("✗ 一覧を取得できませんでした:", res.getResponseCode(), res.getContentText().slice(0, 300));
+    return;
+  }
+  const models = (JSON.parse(res.getContentText()).models || [])
+    .filter(m => (m.supportedGenerationMethods || []).indexOf("generateContent") !== -1)
+    .map(m => ({ id: String(m.name || "").replace(/^models\//, ""), label: m.displayName || "" }));
+  const lite = models.filter(m => /lite/i.test(m.id));
+  console.log("=== 軽量版（lite）の候補 " + lite.length + "件 ===");
+  lite.forEach(m => console.log("★ " + m.id + "  （" + m.label + "）"));
+  console.log("=== その他 " + (models.length - lite.length) + "件 ===");
+  models.filter(m => !/lite/i.test(m.id)).forEach(m => console.log("・" + m.id + "  （" + m.label + "）"));
 }
 
 // 合言葉が設定されているかの確認（値そのものはログに出さない）
