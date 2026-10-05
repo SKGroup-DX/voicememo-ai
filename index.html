@@ -1365,6 +1365,20 @@ function HomeScreen({ member }) {
   const trimmed = transcript.trim();
   const tooLong = trimmed.length > MAX_TRANSCRIPT_CHARS;
   const canSubmit = !!trimmed && !tooLong && !submitting;
+  const canReadClipboard = !!(navigator.clipboard && navigator.clipboard.readText);
+  const pasteFromClipboard = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (!text || !text.trim()) {
+        setError("クリップボードが空です。ボイスメモで文字起こしをコピーしてから押してください。");
+        return;
+      }
+      setTranscript(text);
+      setError(null);
+    } catch {
+      setError("貼り付けできませんでした。下の欄を長押しして「ペースト」を選んでください。");
+    }
+  };
   const handleSubmit = async () => {
     if (!canSubmit) return;
     setError(null);
@@ -1446,7 +1460,30 @@ function HomeScreen({ member }) {
       fontSize: 12,
       color: C.red
     }
-  }, error), /*#__PURE__*/React.createElement("textarea", {
+  }, error), canReadClipboard && /*#__PURE__*/React.createElement("button", {
+    onClick: pasteFromClipboard,
+    disabled: submitting,
+    style: {
+      width: "100%",
+      padding: "10px",
+      marginBottom: 8,
+      background: `${C.blue}12`,
+      color: C.blue,
+      border: `1px solid ${C.blue}30`,
+      borderRadius: 10,
+      fontSize: 14,
+      fontWeight: 600,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 7,
+      cursor: "pointer"
+    }
+  }, /*#__PURE__*/React.createElement(Ic, {
+    n: "clipboard",
+    size: 14,
+    color: C.blue
+  }), "クリップボードから貼り付け"), /*#__PURE__*/React.createElement("textarea", {
     value: transcript,
     onChange: e => setTranscript(e.target.value),
     placeholder: "ここに文字起こしを貼り付け",
