@@ -424,7 +424,7 @@ function timeoutError(msg) {
 // タイムアウトはGAS側でまだ処理が続いている可能性があるため、やり直さない。
 const GAS_RETRY_WAITS_MS = [2000, 4000];
 const GAS_RETRYABLE_STATUS = [404, 408, 429, 500, 502, 503, 504];
-async function gasPost(b, timeoutMs = 30000) {
+async function gasPost(b, timeoutMs = 60000) {
   for (let attempt = 0;; attempt++) {
     try {
       return await gasPostOnce(b, timeoutMs);
@@ -711,7 +711,7 @@ function LoginScreen({
         const res = await gasPost({
           action: "checkPasscode",
           key: k
-        }, 20000);
+        }, 60000);
         ok = !!res.success;
         if (!ok) setErr("合言葉を確認できませんでした: " + (res.error || "不明なエラー"));
       } catch (e) {
@@ -1792,6 +1792,7 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
   const [transcript, setTranscript] = useState("");
   const [interviewee, setInterviewee] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [slowSending, setSlowSending] = useState(false);
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
   const [pollTick, setPollTick] = useState(0);
@@ -1847,7 +1848,7 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
       const results = await Promise.all(pendingIds.split(",").map(id => gasPost({
         action: "getRecordStatus",
         id
-      }, 15000).then(d => [id, d]).catch(() => [id, null])));
+      }, 45000).then(d => [id, d]).catch(() => [id, null])));
       const byId = new Map(results.filter(([, d]) => d && d.found));
       setRecentRecs(prev => prev.map(r => {
         const d = byId.get(r.id);
@@ -1896,7 +1897,7 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
     // 先に着いた場合、GASは受け付けの保存を少し待ってから要約する。応答が届かなくても、
     // 受け付け済みの記録は1分おきの定期実行が要約する。開いたままなら結果を反映する。
     let summarized = null;
-    gasPost({
+    const processP = gasPost({
       action: "processRecord",
       id: recId
     }, 120000).then(res => {
@@ -1908,27 +1909,65 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
           sections: summarized
         } : r));
       }
-    }).catch(() => {});
+      return res;
+    }).catch(() => null);
+    const submitP = gasPost({
+      action: "submitTranscript",
+      id: recId,
+      member,
+      interviewee: typedName,
+      transcript: trimmed
+    }, 90000);
+    // Google側の待ちで返事が遅いときは、待っていることを知らせる
+    const slowTimer = setTimeout(() => setSlowSending(true), 10000);
     try {
       // 文字起こしを保存（受け付け）できたら、すぐ利用者に返す。ここで
       // 保存された記録は、この後アプリを閉じても必ず要約まで進む。
-      accepted = await gasPost({
-        action: "submitTranscript",
-        id: submitIdRef.current,
-        member,
-        interviewee: typedName,
-        transcript: trimmed
-      }, 30000);
-      if (!accepted.success) throw new Error(accepted.error || "GASエラー");
+      // 受け付けの返事より先に要約の結果が届いた場合は、それを保存できた証拠とみなす
+      // （Google側の待ちで、受け付けの返事だけが大きく遅れることがあるため）。
+      accepted = await new Promise((resolve, reject) => {
+        let submitError = null,
+          processGaveUp = false;
+        submitP.then(r => r.success ? resolve({
+          id: r.id
+        }) : reject(new Error(r.error || "GASエラー")), e => {
+          submitError = e;
+          if (processGaveUp) reject(e);
+        });
+        processP.then(r => {
+          if (r && r.success && r.status && r.status !== "skipped") resolve({
+            id: recId
+          });else {
+            processGaveUp = true;
+            if (submitError) reject(submitError);
+          }
+        });
+      });
     } catch (e) {
-      let msg = e.message || "不明なエラー";
-      if (msg.includes("Failed to fetch") || msg.includes("NetworkError") || msg.includes("Load failed")) {
-        msg = "通信が切断されました。電波の良いところで、もう一度「要約する」を押してください（押し直しても2件にはなりません）。";
+      // 時間切れ・通信エラーでも、GAS側では保存できていることがあるので確かめる
+      if (e.isTimeout || e.retryable) {
+        const st = await gasPost({
+          action: "getRecordStatus",
+          id: recId
+        }, 60000).catch(() => null);
+        if (st && st.found) accepted = {
+          id: recId
+        };
       }
-      setError("送信できませんでした: " + msg);
-      setSubmitting(false);
-      return;
+      if (!accepted) {
+        clearTimeout(slowTimer);
+        setSlowSending(false);
+        let msg = e.message || "不明なエラー";
+        if (e.isTimeout || e.retryable) {
+          msg = "サーバーが混み合っていて送れませんでした。少し待って、もう一度「要約する」を押してください（押し直しても2件にはなりません）。";
+        }
+        setError("送信できませんでした: " + msg);
+        setSubmitting(false);
+        return;
+      }
     }
+    clearTimeout(slowTimer);
+    setSlowSending(false);
     // 要約が受け付けより先に終わっていれば、最初から要約を出す。まだなら「AI処理中」に
     // して状況確認に任せる（送り直しで既に完了済みだった場合も、状況確認が要約を取ってくる）
     setRecentRecs(prev => [{
@@ -2173,7 +2212,15 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
     n: "wand-magic-sparkles",
     size: 14,
     color: "#fff"
-  }), "要約する"))), recentRecs.length > 0 ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }), "要約する")), submitting && slowSending && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.text2,
+      lineHeight: 1.6,
+      marginTop: 8,
+      textAlign: "center"
+    }
+  }, "Googleのサーバーが混み合っていて、返事に時間がかかっています。このままお待ちください（最大1分半ほど）。")), recentRecs.length > 0 ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       alignItems: "center",
@@ -2773,7 +2820,7 @@ function HistoryScreen({
       const results = await Promise.all(pendingIds.split(",").map(id => gasPost({
         action: "getRecordStatus",
         id
-      }, 15000).then(d => [id, d]).catch(() => [id, null])));
+      }, 45000).then(d => [id, d]).catch(() => [id, null])));
       const byId = new Map(results.filter(([, d]) => d && d.found));
       setRecords(prev => prev.map(r => {
         const d = byId.get(r.id);
@@ -2823,7 +2870,7 @@ function HistoryScreen({
       gasPost({
         action: "processRecord",
         id: item.id
-      }, 90000).then(r => {
+      }, 120000).then(r => {
         if (r && r.status === "done") {
           setRecords(prev => prev.map(x => x.id === item.id ? {
             ...x,
