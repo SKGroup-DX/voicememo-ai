@@ -115,7 +115,8 @@ function getHistory(body) {
   const type   = String(body.type || "");
   const terms  = String(body.q || "").toLowerCase().split(/[\s　]+/).filter(Boolean);
 
-  const rows = readAllRows();
+  // 文字起こしの本文は検索するときだけ読む（記録が増えるほど重くなる列のため）
+  const rows = terms.length ? readAllRows() : readRowsWithoutTranscript_();
   const matched = [];
   for (let i = rows.length - 1; i >= 0; i--) { // 新しい順
     const row = rows[i];
@@ -771,6 +772,17 @@ function readAllRows() {
   return sheet.getRange(HEADER_ROW + 1, 1, lastRow - HEADER_ROW, NUM_COLS).getValues();
 }
 
+// 一覧用：文字起こしの列を読まずに全行を返す（その列の位置には null を入れる）
+function readRowsWithoutTranscript_() {
+  const sheet = recordsSheet();
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= HEADER_ROW) return [];
+  const n = lastRow - HEADER_ROW;
+  const before = sheet.getRange(HEADER_ROW + 1, 1, n, COL.TRANSCRIPT - 1).getValues();
+  const after = sheet.getRange(HEADER_ROW + 1, COL.TRANSCRIPT + 1, n, NUM_COLS - COL.TRANSCRIPT).getValues();
+  return before.map((r, i) => r.concat([null], after[i]));
+}
+
 // IDで行番号を探す（見つからなければ-1）
 function findRecordRowById(sheet, id) {
   const lastRow = sheet.getLastRow();
@@ -809,7 +821,8 @@ function rowToRecord(row) {
       member:        String(row[COL.MEMBER - 1] || ""),
       interviewee:   String(row[COL.INTERVIEWEE - 1] || ""),
       sections:     stripTranscript(parseSections(row[COL.SECTIONS - 1])),
-      hasTranscript: !!rowTranscript(row),
+      // 文字起こしの列を読んでいない場合（null）は、あるものとして扱う（受け付け時に必ず保存しているため）
+      hasTranscript: row[COL.TRANSCRIPT - 1] === null ? true : !!rowTranscript(row),
       status:        String(row[COL.STATUS - 1] || ""),
       processError:  String(row[COL.PROCESS_ERROR - 1] || "")
     };

@@ -446,6 +446,7 @@ async function gasPost(b, timeoutMs = 30000) {
   }
   if (json.authError) {
     lsClearKey();
+    histCacheClear();
     window.dispatchEvent(new Event(AUTH_ERROR_EVENT));
     throw new Error(json.error || "合言葉が正しくありません");
   }
@@ -548,6 +549,7 @@ function lsSetUser(u) {
 function lsClearAuth() {
   localStorage.removeItem(AUTH_KEY);
   localStorage.removeItem("vm_user");
+  histCacheClear();
 }
 // 合言葉はログアウトしても残す（名前の切り替えのたびに入れ直さなくてよいように）。
 // 消すのはGASに「違う」と言われた時だけ。
@@ -577,6 +579,33 @@ function lsGetLastName() {
 function lsSetLastName(n) {
   try {
     localStorage.setItem("vm_last_name", n);
+  } catch {}
+}
+// 履歴の最初のページ（絞り込みなし）を端末に保存しておき、画面を開いたらすぐ表示する。
+// GASの応答はGoogle側の都合で数秒〜数十秒かかることがあるため、表示した後に裏で
+// 最新を取り直して差し替える。文字起こしの本文は含まない。ログアウトしたら消す。
+const HIST_CACHE_KEY = "vm_history_cache";
+function histCacheGet(member) {
+  try {
+    const c = JSON.parse(localStorage.getItem(HIST_CACHE_KEY) || "null");
+    if (c && c.member === member && Array.isArray(c.records)) return c;
+  } catch {}
+  return null;
+}
+function histCacheSet(member, records, total) {
+  try {
+    const first = records.slice(0, PAGE_SIZE);
+    localStorage.setItem(HIST_CACHE_KEY, JSON.stringify({
+      member,
+      records: first,
+      total,
+      hasMore: total > first.length
+    }));
+  } catch {}
+}
+function histCacheClear() {
+  try {
+    localStorage.removeItem(HIST_CACHE_KEY);
   } catch {}
 }
 
@@ -1714,8 +1743,17 @@ function uniqueNames(names) {
 }
 function HomeScreen({ member, onShowHelp, onShowHistory }) {
   const [selectedRec, setSelectedRec] = useState(null);
-  const [recentRecs, setRecentRecs] = useState([]);
-  const [nameCandidates, setNameCandidates] = useState([]);
+  // 端末に保存した前回の履歴があれば、それをすぐ出しておく（裏で最新に差し替える）
+  const cachedRef = useRef(undefined);
+  if (cachedRef.current === undefined) {
+    const c = histCacheGet(member);
+    cachedRef.current = c ? c.records.map(r => ({
+      ...r,
+      sections: normalizeSections(r.sections)
+    })) : null;
+  }
+  const [recentRecs, setRecentRecs] = useState(() => (cachedRef.current || []).slice(0, HOME_RECENT_COUNT));
+  const [nameCandidates, setNameCandidates] = useState(() => uniqueNames((cachedRef.current || []).map(r => r.interviewee)));
   const [transcript, setTranscript] = useState("");
   const [interviewee, setInterviewee] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -1732,17 +1770,29 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
       offset: 0,
       member
     }).then(d => {
+      if (d.success === false) return;
       const recs = (d.records || []).map(r => ({
         ...r,
         sections: normalizeSections(r.sections)
       }));
       setRecentRecs(recs.slice(0, HOME_RECENT_COUNT));
       setNameCandidates(uniqueNames(recs.map(r => r.interviewee)));
+      histCacheSet(member, recs, d.total || recs.length);
     }).catch(() => {});
   }, [member]);
   useEffect(() => {
     fetchRecent();
   }, [fetchRecent]);
+  // 受け付けた記録や要約の完了を、端末に保存した履歴にも反映する
+  // （履歴画面を開いたとき、すぐ正しい状態で出るように）
+  useEffect(() => {
+    const c = histCacheGet(member);
+    if (!c) return;
+    const byId = new Map(recentRecs.map(r => [r.id, r]));
+    const known = new Set(c.records.map(r => r.id));
+    const added = recentRecs.filter(r => !known.has(r.id));
+    histCacheSet(member, [...added, ...c.records.map(r => byId.get(r.id) || r)], (c.total || 0) + added.length);
+  }, [recentRecs]);
   // 処理待ち・処理中の記録があれば5秒おきに状態を確認し、終わったものから表示を
   // 切り替える。GAS側で固まった場合に備え約10分で打ち切る。
   const pendingIds = recentRecs.filter(r => ["queued", "processing"].includes(r.status)).map(r => r.id).join(",");
@@ -2532,10 +2582,25 @@ function TypeBadge({
 function HistoryScreen({
   memberFilter
 }) {
-  const [records, setRecords] = useState([]);
-  const [total, setTotal] = useState(0);
-  const [hasMore, setHasMore] = useState(false);
-  const [loading, setLoading] = useState(true);
+  // 端末に保存した前回の履歴があれば、それをすぐ出しておく（裏で最新に差し替える）
+  const loadCached = () => {
+    const c = histCacheGet(memberFilter);
+    return c ? {
+      ...c,
+      records: c.records.map(r => ({
+        ...r,
+        sections: normalizeSections(r.sections)
+      }))
+    } : null;
+  };
+  const [initialCache] = useState(loadCached);
+  const [records, setRecords] = useState(() => initialCache ? initialCache.records : []);
+  const [total, setTotal] = useState(() => initialCache ? initialCache.total || 0 : 0);
+  const [hasMore, setHasMore] = useState(() => initialCache ? !!initialCache.hasMore : false);
+  const [loading, setLoading] = useState(() => !initialCache);
+  const [refreshing, setRefreshing] = useState(false);
+  // 今の一覧が「絞り込みなしの一覧」か（端末に保存してよいのはこの一覧だけ）
+  const recordsDefaultRef = useRef(true);
   const [moreLoading, setMoreLoading] = useState(false);
   const [error, setError] = useState(null);
   const [q, setQ] = useState("");
@@ -2570,12 +2635,26 @@ function HistoryScreen({
   };
   const fetchFirst = useCallback(async () => {
     const reqId = ++reqIdRef.current;
-    setLoading(true);
+    const isDefault = !searchQ && typeFilter === "all";
+    const cached = isDefault ? loadCached() : null;
     setError(null);
+    if (cached) {
+      // 保存してある一覧を出したまま、裏で最新を取りに行く
+      recordsDefaultRef.current = true;
+      setRecords(cached.records);
+      setTotal(cached.total || 0);
+      setHasMore(!!cached.hasMore);
+      offsetRef.current = PAGE_SIZE;
+      setLoading(false);
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
     try {
       const d = await gasPost(buildParams(0));
       if (reqId !== reqIdRef.current) return;
       if (d.success === false) throw new Error(d.error);
+      recordsDefaultRef.current = isDefault;
       setRecords((d.records || []).map(r => ({
         ...r,
         sections: normalizeSections(r.sections)
@@ -2585,10 +2664,16 @@ function HistoryScreen({
       offsetRef.current = PAGE_SIZE;
     } catch (e) {
       if (reqId !== reqIdRef.current) return;
-      setError("履歴を取得できませんでした。接続を確認してください。");
+      setError(cached ? "最新の履歴を取得できませんでした。前回読み込んだ内容を表示しています。" : "履歴を取得できませんでした。接続を確認してください。");
     }
     setLoading(false);
+    setRefreshing(false);
   }, [memberFilter, searchQ, typeFilter]);
+  // 絞り込みなしの一覧が変わったら（最新の取得・削除・編集・要約の完了など）端末に保存し直す
+  useEffect(() => {
+    if (loading || !recordsDefaultRef.current) return;
+    histCacheSet(memberFilter, records, total);
+  }, [records, total, loading]);
   const fetchMore = async () => {
     if (moreLoading || !hasMore) return;
     const reqId = reqIdRef.current;
@@ -2751,7 +2836,8 @@ function HistoryScreen({
     }
   }, isFiltering ? "該当" : "全", total, "件")), /*#__PURE__*/React.createElement("button", {
     onClick: fetchFirst,
-    disabled: loading,
+    disabled: loading || refreshing,
+    "aria-label": refreshing ? "最新の履歴を確認中" : "履歴を更新",
     style: {
       width: 34,
       height: 34,
@@ -2764,9 +2850,11 @@ function HistoryScreen({
       justifyContent: "center"
     }
   }, /*#__PURE__*/React.createElement(Ic, {
-    n: "rotate-right",
+    // 保存してある一覧を出している間に、裏で最新を確認していることを回転で示す
+    n: refreshing ? "spinner" : "rotate-right",
     size: 14,
-    color: C.text2
+    color: refreshing ? C.blue : C.text2,
+    cls: refreshing ? "spin" : ""
   }))), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
@@ -3128,7 +3216,8 @@ function App() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
   const [showOfflineBanner, setShowOfflineBanner] = useState(false);
-  const [member, setMember] = useState("");
+  // 最初の表示から名前を入れておく（端末に保存した履歴をすぐ出すため）
+  const [member, setMember] = useState(() => authed ? currentUser?.name || "" : "");
   useEffect(() => {
     if (authed && currentUser?.name) setMember(currentUser.name);
   }, [authed]);
