@@ -2292,58 +2292,58 @@ function HomeScreen({ member, active, onShowHistory }) {
 }
 
 // ── HELP SCREEN ──────────────────────────────────────────
+// ほかの画面と同じく、まとまりごとに白い枠1つへ行を並べる。文章は短く、詳しい補足は
+// 「困ったときは」に寄せる。
 const HELP_STEPS = [{
   title: "録音する",
-  body: "iPhone純正の「ボイスメモ」アプリで録音します。"
+  body: "iPhoneの「ボイスメモ」で録音"
 }, {
-  title: "文字起こしをコピーする",
-  body: "録音を開いて「文字起こしを表示」→「文字起こしをコピー」を押します。",
-  note: "録音の一覧から直接「文字起こしをコピー」すると、うまくコピーされないことがあります。"
+  title: "文字起こしをコピー",
+  body: "録音を開いて「文字起こしを表示」→「文字起こしをコピー」"
 }, {
-  title: "貼り付けて要約する",
-  body: "ホーム画面の「タップして貼り付け」を押し、相手・参加者を入れて（欄を押すと以前の名前が候補に出ます）「要約する」を押します。「受け付けました」と出たら、アプリを閉じても大丈夫です。開いたままなら、要約が終わると「要約ができました」と表示され、［要約を見る］から確認できます（通常は数秒〜十数秒。混み合っている時はもう少しかかります）。"
+  title: "貼り付けて要約",
+  body: "ホームの「タップして貼り付け」→［要約する］。受け付け後はアプリを閉じても大丈夫"
 }, {
   title: "見返す",
-  body: "要約は「履歴」に保存されます。1on1／会議の切り替えや、キーワード・相手の名前で探せます。要約画面の［コピー］で他のアプリに貼り付けられ、［編集］で内容を直せます。削除は要約画面のいちばん下からできます。"
+  body: "メニューの「履歴」から。［コピー］［編集］、削除は要約画面のいちばん下"
 }];
 const HELP_SUMMARY_TYPES = [{
-  type: "1on1",
-  items: ["今日のゴール", "本人の声", "アクション", "フォロー事項"],
-  note: "あわせて「面談分析」も表示されます。"
+  label: "1on1",
+  body: "今日のゴール・本人の声・アクション・フォロー事項＋面談分析"
 }, {
-  type: "group",
-  items: ["目的・アジェンダ", "主な決定事項", "担当者ごとのToDo", "保留事項・継続協議テーマ"]
+  label: "会議",
+  body: "目的・アジェンダ・主な決定事項・担当者ごとのToDo・保留事項"
 }];
 const HELP_ANALYSIS = [{
   label: "発言の割合",
-  body: "「あなた」（面談を進める側）と「相手」が話した量の割合です。相手の割合が大きいほど、本人の考えを引き出せています。"
+  body: "相手が多いほど、本人の考えを引き出せています"
 }, {
   label: "傾聴度",
-  body: "相手の話を遮らず、深掘りの質問ができていたかの目安です（0〜100）。70以上は緑、40〜69は橙、39以下は赤で表示されます。"
+  body: "話を遮らず深掘りできたかの目安（70以上で緑）"
 }, {
-  label: "オープン質問割合",
-  body: "「はい／いいえ」で終わらない、「なぜ」「どう思う？」のような質問の割合です。"
+  label: "オープン質問",
+  body: "「なぜ」「どう思う？」のような質問の割合"
 }];
 const HELP_FAQ = [{
-  q: "貼り付けできない／「クリップボードが空です」と出る",
-  a: "ボイスメモで録音を開き、「文字起こしを表示」してから「文字起こしをコピー」をしてください。それでも入らない場合は、表示される欄を長押しして「ペースト」を選んでください。"
+  q: "貼り付けできない",
+  a: "ボイスメモで録音を開き、「文字起こしを表示」→「文字起こしをコピー」をしてください。録音の一覧から直接コピーすると失敗することがあります。それでも入らないときは、表示される欄を長押しして「ペースト」を選んでください。"
 }, {
-  q: "「AI処理中」のまま終わらない",
-  a: "混み合っていると数分かかることがあります。終わり次第、ホーム画面と履歴に自動で反映されます。10分以上たっても変わらない場合は、履歴画面を開き直してください。"
+  q: "「要約中」のまま終わらない",
+  a: "混み合っていると数分かかることがあります。10分以上変わらないときは、履歴を開き直してください。"
 }, {
-  q: "「処理に失敗しました」と出た",
-  a: "履歴の該当する記録にある「再試行」を押してください。失敗の多くは一時的な混雑によるもので、少し時間を置けばほとんどの場合うまくいきます。"
+  q: "「要約できませんでした」と出た",
+  a: "履歴の［再試行］を押してください。多くは一時的な混雑で、少し時間をおけば通ります。"
 }, {
   q: "履歴に出てこない",
-  a: "履歴はログインした名前ごとに分かれています。メニューの「ログイン中」に表示されている名前が、いつもと同じか確認してください。"
+  a: "履歴は名前ごとに分かれています。メニューの「ログイン中」の名前がいつもと同じか確認してください。"
 }, {
   q: "長い会議を送れない",
-  a: "1回に送れるのは3万文字（会話でおよそ1時間半〜2時間分）までです。録音を途中で区切って、何回かに分けてください。"
+  a: "1回に送れるのは3万文字（会話でおよそ1時間半）までです。録音を分けて送ってください。"
 }, {
-  q: "合言葉を聞かれた／分からない",
-  a: "記録を守るため、社内で共有されている合言葉が必要です。分からない場合は社内の担当者に確認してください。一度入力すれば、その端末では次から不要です（合言葉が変更された時だけ、もう一度入力します）。"
+  q: "合言葉を聞かれた",
+  a: "社内の担当者に確認してください。一度入力すれば、その端末では次から不要です。"
 }, {
-  q: "表示がおかしい／新しい機能が出てこない",
+  q: "表示がおかしい",
   a: "メニューの「最新版に更新」を押してください。"
 }];
 function HelpSection({
@@ -2352,64 +2352,40 @@ function HelpSection({
 }) {
   return /*#__PURE__*/React.createElement("div", {
     style: {
-      marginBottom: 20
+      marginBottom: 22
     }
   }, /*#__PURE__*/React.createElement("p", {
     style: {
-      fontSize: 13,
+      fontSize: 12,
       fontWeight: 600,
       color: C.text2,
-      margin: "0 2px 8px"
+      margin: "0 4px 6px"
     }
-  }, title), children);
+  }, title), /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: C.surface,
+      borderRadius: 12,
+      border: `1px solid ${C.sep}`,
+      overflow: "hidden"
+    }
+  }, children));
 }
-const helpCard = {
-  background: C.surface,
-  borderRadius: 14,
-  border: `1px solid ${C.sep}`
-};
-function HelpScreen() {
-  const [openQ, setOpenQ] = useState(null);
+// 枠の中の1行（見出しと説明の2段）
+function HelpRow({
+  first,
+  lead,
+  title,
+  body
+}) {
   return /*#__PURE__*/React.createElement("div", {
     style: {
-      height: "100%",
-      overflowY: "auto",
-      WebkitOverflowScrolling: "touch",
-      padding: "12px 16px calc(24px + env(safe-area-inset-bottom))"
-    }
-  }, /*#__PURE__*/React.createElement("h2", {
-    style: {
-      fontSize: 20,
-      fontWeight: 700,
-      color: C.text,
-      marginBottom: 14
-    }
-  }, "使い方"), /*#__PURE__*/React.createElement(HelpSection, {
-    title: "基本の流れ"
-  }, HELP_STEPS.map((s, i) => /*#__PURE__*/React.createElement("div", {
-    key: i,
-    style: {
-      ...helpCard,
       display: "flex",
+      alignItems: "flex-start",
       gap: 12,
-      padding: "14px",
-      marginBottom: 8
+      padding: "11px 14px",
+      borderTop: first ? "none" : `1px solid ${C.sep}`
     }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      width: 26,
-      height: 26,
-      borderRadius: "50%",
-      background: C.blue,
-      color: "#fff",
-      fontSize: 13,
-      fontWeight: 700,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      flexShrink: 0
-    }
-  }, i + 1), /*#__PURE__*/React.createElement("div", {
+  }, lead, /*#__PURE__*/React.createElement("div", {
     style: {
       flex: 1,
       minWidth: 0
@@ -2418,117 +2394,80 @@ function HelpScreen() {
     style: {
       fontSize: 15,
       fontWeight: 600,
-      color: C.text,
-      marginBottom: 4
-    }
-  }, s.title), /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 13,
-      color: C.text2,
-      lineHeight: 1.7
-    }
-  }, s.body), s.note && /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 12,
-      color: C.orange,
-      lineHeight: 1.6,
-      marginTop: 6
-    }
-  }, "※", s.note))))), /*#__PURE__*/React.createElement(HelpSection, {
-    title: "要約の見方"
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      ...helpCard,
-      padding: "14px"
-    }
-  }, /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 13,
-      color: C.text2,
-      lineHeight: 1.7,
-      marginBottom: 12
-    }
-  }, "1on1か複数人の会議かはAIが自動で判定し、それぞれに合った項目で要約します。"), HELP_SUMMARY_TYPES.map(t => /*#__PURE__*/React.createElement("div", {
-    key: t.type,
-    style: {
-      marginBottom: 12
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginBottom: 6
-    }
-  }, /*#__PURE__*/React.createElement(TypeBadge, {
-    type: t.type
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      flexWrap: "wrap",
-      gap: 6
-    }
-  }, t.items.map(label => /*#__PURE__*/React.createElement("span", {
-    key: label,
-    style: {
-      fontSize: 12,
-      color: C.text,
-      background: C.bg,
-      borderRadius: 6,
-      padding: "3px 8px"
-    }
-  }, label))), t.note && /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 12,
-      color: C.text2,
-      marginTop: 2
-    }
-  }, t.note))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      borderTop: `1px solid ${C.sep}`,
-      paddingTop: 12
-    }
-  }, /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 13,
-      fontWeight: 600,
-      color: C.text,
-      marginBottom: 8
-    }
-  }, "面談分析の見方（1on1のみ）"), HELP_ANALYSIS.map(a => /*#__PURE__*/React.createElement("div", {
-    key: a.label,
-    style: {
-      marginBottom: 8
-    }
-  }, /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 13,
-      fontWeight: 600,
       color: C.text
     }
-  }, a.label), /*#__PURE__*/React.createElement("p", {
+  }, title), /*#__PURE__*/React.createElement("p", {
     style: {
-      fontSize: 12,
+      fontSize: 13,
       color: C.text2,
-      lineHeight: 1.7
+      lineHeight: 1.6,
+      marginTop: 2
     }
-  }, a.body))), /*#__PURE__*/React.createElement("p", {
+  }, body)));
+}
+function HelpScreen() {
+  const [openQ, setOpenQ] = useState(null);
+  return /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 11,
-      color: C.text2,
-      marginTop: 4
+      height: "100%",
+      overflowY: "auto",
+      WebkitOverflowScrolling: "touch",
+      padding: "16px 16px calc(24px + env(safe-area-inset-bottom))"
     }
-  }, "※いずれも文字起こしからAIが推定した目安です。")))), /*#__PURE__*/React.createElement(HelpSection, {
+  }, /*#__PURE__*/React.createElement("h2", {
+    style: {
+      fontSize: 22,
+      fontWeight: 700,
+      color: C.text,
+      marginBottom: 16
+    }
+  }, "使い方"), /*#__PURE__*/React.createElement(HelpSection, {
+    title: "基本の流れ"
+  }, HELP_STEPS.map((s, i) => /*#__PURE__*/React.createElement(HelpRow, {
+    key: i,
+    first: i === 0,
+    title: s.title,
+    body: s.body,
+    lead: /*#__PURE__*/React.createElement("span", {
+      style: {
+        width: 22,
+        height: 22,
+        marginTop: 1,
+        borderRadius: "50%",
+        background: `${C.blue}18`,
+        color: C.blue,
+        fontSize: 12,
+        fontWeight: 700,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0
+      }
+    }, i + 1)
+  }))), /*#__PURE__*/React.createElement(HelpSection, {
+    title: "要約の項目（1on1か会議かはAIが自動で判定）"
+  }, HELP_SUMMARY_TYPES.map((t, i) => /*#__PURE__*/React.createElement(HelpRow, {
+    key: t.label,
+    first: i === 0,
+    title: t.label,
+    body: t.body
+  }))), /*#__PURE__*/React.createElement(HelpSection, {
+    title: "面談分析（1on1のみ・AIによる目安）"
+  }, HELP_ANALYSIS.map((a, i) => /*#__PURE__*/React.createElement(HelpRow, {
+    key: a.label,
+    first: i === 0,
+    title: a.label,
+    body: a.body
+  }))), /*#__PURE__*/React.createElement(HelpSection, {
     title: "困ったときは"
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      ...helpCard,
-      overflow: "hidden"
-    }
   }, HELP_FAQ.map((f, i) => /*#__PURE__*/React.createElement("div", {
     key: i,
     style: {
-      borderBottom: i < HELP_FAQ.length - 1 ? `1px solid ${C.sep}` : "none"
+      borderTop: i > 0 ? `1px solid ${C.sep}` : "none"
     }
   }, /*#__PURE__*/React.createElement("button", {
     onClick: () => setOpenQ(openQ === i ? null : i),
+    "aria-expanded": openQ === i,
     style: {
       width: "100%",
       display: "flex",
@@ -2543,8 +2482,7 @@ function HelpScreen() {
   }, /*#__PURE__*/React.createElement("span", {
     style: {
       flex: 1,
-      fontSize: 14,
-      fontWeight: 500,
+      fontSize: 15,
       color: C.text,
       lineHeight: 1.5
     }
@@ -2554,71 +2492,24 @@ function HelpScreen() {
     color: C.text2
   })), openQ === i && /*#__PURE__*/React.createElement("p", {
     style: {
-      fontSize: 13,
+      fontSize: 14,
       color: C.text2,
       lineHeight: 1.7,
       padding: "0 14px 14px"
     }
-  }, f.a))))), /*#__PURE__*/React.createElement(HelpSection, {
-    title: "情報の取り扱いについて"
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      background: `${C.orange}12`,
-      border: `1px solid ${C.orange}40`,
-      borderRadius: 14,
-      padding: "14px"
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      alignItems: "center",
-      gap: 6,
-      marginBottom: 6
-    }
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: "circle-exclamation",
-    size: 14,
-    color: C.orange
-  }), /*#__PURE__*/React.createElement("p", {
+  }, f.a)))), /*#__PURE__*/React.createElement(HelpSection, {
+    title: "送る内容について"
+  }, /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 14,
-      fontWeight: 600,
-      color: C.text
-    }
-  }, "送る内容にご注意ください")), /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 13,
-      color: C.text,
-      lineHeight: 1.7
-    }
-  }, "このアプリは、GoogleのAI（Gemini）の無料枠を使って要約しています。無料枠では、送った文字起こしの内容がGoogleのサービス改善に使われる場合があります。"), /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 13,
       color: C.text,
       lineHeight: 1.7,
-      marginTop: 6
+      padding: "12px 14px"
     }
-  }, "人事評価・健康・家庭の事情など特に機密性の高い内容や、お客様の個人情報を含む会話は、該当する部分を削除してから送るなど、取り扱いに注意してください。"))));
+  }, "無料枠のGoogle AI（Gemini）で要約しているため、内容がGoogleのサービス改善に使われる場合があります。人事評価・健康・お客様の個人情報など、特に機密性の高い部分は削除してから送ってください。")));
 }
 
 // ── HISTORY SCREEN ────────────────────────────────────────
-function TypeBadge({
-  type
-}) {
-  if (type !== "1on1" && type !== "group") return null;
-  const color = type === "1on1" ? C.purple : C.green;
-  return /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 10,
-      fontWeight: 700,
-      padding: "2px 7px",
-      borderRadius: 6,
-      flexShrink: 0,
-      background: `${color}18`,
-      color
-    }
-  }, type === "1on1" ? "1on1" : "会議");
-}
 // 削除の確認（履歴・ホームで共通）。削除に失敗した場合は閉じずにその場で知らせる
 // （以前は失敗しても一覧から消えてしまい、後で記録が戻ってくることがあった）。
 function DeleteConfirm({
