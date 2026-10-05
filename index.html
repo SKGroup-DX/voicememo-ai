@@ -383,6 +383,10 @@ const GAS_URL = "https://script.google.com/macros/s/AKfycbwC91pYajGGtpATaa2ndoAK
 const AUTH_KEY = "vm_auth_v2";
 const PAGE_SIZE = 20;
 const AUTH_TTL = 30 * 24 * 60 * 60 * 1000;
+// 社内共通の合言葉。値はGAS側（スクリプトプロパティ APP_PASSCODE）にだけ置き、
+// アプリは利用者が入力したものを端末に保存して毎回送る。
+const PASSCODE_KEY = "vm_passcode";
+const AUTH_ERROR_EVENT = "vm-auth-error";
 
 // ── COLORS ──────────────────────────────────────────────
 const C = {
@@ -399,9 +403,7 @@ const C = {
   purple: "#AF52DE"
 };
 
-// 面談向けの要約プロンプトはGAS側（getDefaultSystemPrompt）に一本化した。
-// 録音・送信はAppleショートカット経由で行われ、クライアントからsystemPromptを
-// 渡す経路がなくなったため。
+// 要約のプロンプトはGAS側（getDefaultSystemPrompt）にだけある。
 
 // ── UTILS ───────────────────────────────────────────────
 function timeoutError(msg) {
@@ -413,24 +415,8 @@ function timeoutError(msg) {
 // fetchを中断すると、iOS Safari(WebKit)ではリダイレクト処理と衝突してfetchが
 // 二度と解決しなくなることがあるため、fetch自体は中断せずPromise.raceで
 // 「待つのをあきらめる」方式にする（fetchはバックグラウンドで走り続けるが無害）。
-async function gasGet(p, timeoutMs = 30000) {
-  let r;
-  try {
-    r = await Promise.race([fetch(GAS_URL + "?" + new URLSearchParams(p)), new Promise((_, reject) => setTimeout(() => reject(timeoutError("通信がタイムアウトしました。ネットワーク状況を確認して再試行してください。")), timeoutMs))]);
-  } catch (e) {
-    if (e.isTimeout) throw e;
-    throw new Error("通信に失敗しました。電波の状況を確認して、もう一度お試しください（" + e.message + "）");
-  }
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  let json;
-  try {
-    json = await r.json();
-  } catch {
-    throw new Error("サーバー応答の解析に失敗しました");
-  }
-  if (json == null || typeof json !== "object") throw new Error("サーバーからの応答が空でした");
-  return json;
-}
+// 呼び出しはすべてPOSTで、本文に合言葉（key）を入れる（URLに載せないため）。
+// 合言葉が違うと言われたら、保存していた合言葉を消してログイン画面に戻す。
 async function gasPost(b, timeoutMs = 30000) {
   let r;
   try {
@@ -439,7 +425,10 @@ async function gasPost(b, timeoutMs = 30000) {
       headers: {
         "Content-Type": "text/plain"
       },
-      body: JSON.stringify(b)
+      body: JSON.stringify({
+        key: lsGetKey(),
+        ...b
+      })
     }), new Promise((_, reject) => setTimeout(() => reject(timeoutError("通信がタイムアウトしました。時間をおいて再試行してください。")), timeoutMs))]);
   } catch (e) {
     if (e.isTimeout) throw e;
@@ -454,6 +443,11 @@ async function gasPost(b, timeoutMs = 30000) {
   }
   if (json == null || typeof json !== "object") {
     throw new Error("サーバーからの応答が空でした");
+  }
+  if (json.authError) {
+    lsClearKey();
+    window.dispatchEvent(new Event(AUTH_ERROR_EVENT));
+    throw new Error(json.error || "合言葉が正しくありません");
   }
   return json;
 }
@@ -555,6 +549,23 @@ function lsClearAuth() {
   localStorage.removeItem(AUTH_KEY);
   localStorage.removeItem("vm_user");
 }
+// 合言葉はログアウトしても残す（名前の切り替えのたびに入れ直さなくてよいように）。
+// 消すのはGASに「違う」と言われた時だけ。
+function lsGetKey() {
+  try {
+    return localStorage.getItem(PASSCODE_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+function lsSetKey(k) {
+  localStorage.setItem(PASSCODE_KEY, k);
+}
+function lsClearKey() {
+  try {
+    localStorage.removeItem(PASSCODE_KEY);
+  } catch {}
+}
 // ログアウトや30日の期限切れ後も、ログイン画面で「前回の名前」を出すために別に保存する
 function lsGetLastName() {
   try {
@@ -606,21 +617,50 @@ function normalizeName(s) {
   return String(s || "").replace(/[\s　]+/g, "");
 }
 function LoginScreen({
-  onLogin
+  onLogin,
+  notice
 }) {
   const [name, setName] = useState("");
+  const [passcode, setPasscode] = useState("");
   const [err, setErr] = useState("");
+  const [checking, setChecking] = useState(false);
   const lastName = lsGetLastName();
-  const doLogin = raw => {
+  // 合言葉はこの端末で一度通れば保存されるので、2回目からは名前だけでよい
+  const needKey = !lsGetKey();
+  const doLogin = async raw => {
+    if (checking) return;
     const n = normalizeName(raw);
     if (!n) {
       setErr("名前を入力してください");
       return;
     }
+    const k = passcode.trim();
+    if (needKey) {
+      if (!k) {
+        setErr("合言葉を入力してください");
+        return;
+      }
+      setErr("");
+      setChecking(true);
+      let ok = false;
+      try {
+        const res = await gasPost({
+          action: "checkPasscode",
+          key: k
+        }, 20000);
+        ok = !!res.success;
+        if (!ok) setErr("合言葉を確認できませんでした: " + (res.error || "不明なエラー"));
+      } catch (e) {
+        setErr(String(e.message).includes("合言葉") ? "合言葉が正しくありません" : "合言葉を確認できませんでした。電波の状況を確認して、もう一度お試しください。");
+      }
+      setChecking(false);
+      if (!ok) return;
+    }
     const u = {
       name: n
     };
     try {
+      if (needKey) lsSetKey(k);
       lsSetAuth();
       lsSetUser(u);
     } catch {
@@ -674,8 +714,77 @@ function LoginScreen({
       lineHeight: 1.7,
       maxWidth: 300
     }
-  }, "iPhoneのボイスメモの文字起こしを貼り付けるだけで、1on1や会議の要約を作成します"), lastName && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+  }, "iPhoneのボイスメモの文字起こしを貼り付けるだけで、1on1や会議の要約を作成します"), notice && /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: "100%",
+      maxWidth: 280,
+      background: `${C.orange}14`,
+      border: `1px solid ${C.orange}40`,
+      borderRadius: 12,
+      padding: "10px 12px",
+      marginBottom: 16,
+      fontSize: 13,
+      color: C.text,
+      lineHeight: 1.6
+    }
+  }, notice), needKey && /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: "100%",
+      maxWidth: 280,
+      marginBottom: 20
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      fontWeight: 600,
+      color: C.text2,
+      margin: "0 2px 6px"
+    }
+  }, "合言葉（社内で共有されているもの）"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "relative"
+    }
+  }, /*#__PURE__*/React.createElement(Ic, {
+    n: "lock",
+    size: 15,
+    color: C.text2,
+    style: {
+      position: "absolute",
+      left: 13,
+      top: "50%",
+      transform: "translateY(-50%)"
+    }
+  }), /*#__PURE__*/React.createElement("input", {
+    type: "password",
+    value: passcode,
+    autoComplete: "off",
+    onChange: e => {
+      setPasscode(e.target.value);
+      setErr("");
+    },
+    placeholder: "合言葉",
+    style: {
+      width: "100%",
+      padding: "13px 13px 13px 40px",
+      borderRadius: 12,
+      border: `1.5px solid ${passcode ? C.blue : C.sep}`,
+      fontSize: 16,
+      background: "#fff",
+      color: C.text,
+      outline: "none",
+      WebkitUserSelect: "text",
+      userSelect: "text"
+    }
+  })), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11,
+      color: C.text2,
+      margin: "6px 2px 0",
+      lineHeight: 1.6
+    }
+  }, "この端末で一度入力すれば、次からは不要です。")), lastName && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
     onClick: () => doLogin(lastName),
+    disabled: checking,
     style: {
       width: 280,
       padding: "14px",
@@ -741,15 +850,32 @@ function LoginScreen({
       WebkitUserSelect: "text",
       userSelect: "text"
     }
-  })), err && /*#__PURE__*/React.createElement("p", {
+  })), checking && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 13,
+      color: C.text2,
+      marginBottom: 8,
+      display: "flex",
+      alignItems: "center",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement(Ic, {
+    n: "spinner",
+    size: 13,
+    color: C.text2,
+    cls: "spin"
+  }), "合言葉を確認しています..."), !checking && err && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 13,
       color: C.red,
-      marginBottom: 8
+      marginBottom: 8,
+      maxWidth: 280,
+      textAlign: "center",
+      lineHeight: 1.6
     }
   }, err), /*#__PURE__*/React.createElement("button", {
     onClick: () => doLogin(name),
-    disabled: !name.trim(),
+    disabled: !name.trim() || checking,
     style: lastName ? {
       width: 280,
       padding: "13px",
@@ -1083,8 +1209,29 @@ function SummaryModal({
   const [draft, setDraft] = useState(null);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
+  // 一覧を軽くするため、文字起こしの本文は「文字起こし」を開いた時に取りに行く
+  // （以前の記録は要約の中に入っていることがあるので、あればそれを使う）
+  const [transcript, setTranscript] = useState(item.sections?._transcript || "");
+  const [transcriptState, setTranscriptState] = useState("idle");
+  const hasTranscript = !!transcript || !!item.hasTranscript;
+  const toggleTranscript = async () => {
+    const opening = !transcriptOpen;
+    setTranscriptOpen(opening);
+    if (!opening || transcript || transcriptState === "loading") return;
+    setTranscriptState("loading");
+    try {
+      const res = await gasPost({
+        action: "getTranscript",
+        id: item.id
+      });
+      if (!res.success) throw new Error(res.error);
+      setTranscript(res.transcript || "");
+      setTranscriptState("idle");
+    } catch {
+      setTranscriptState("error");
+    }
+  };
   const secs = item.sections?.sections || [];
-  const transcript = item.sections?._transcript || "";
   const analysis = item.sections?.analysis || null;
   const toggleCollapse = key => setCollapsed(s => {
     const n = new Set(s);
@@ -1469,7 +1616,7 @@ function SummaryModal({
   typeof analysis.openQuestionRatio === "number" && /*#__PURE__*/React.createElement("p", {
     style: { fontSize: 11, color: C.text2, marginTop: 8 }
   }, `\ud83d\udca1 \u30aa\u30fc\u30d7\u30f3\u8cea\u554f\u5272\u5408: ${analysis.openQuestionRatio}%`)
-  ), transcript && /*#__PURE__*/React.createElement("div", {
+  ), hasTranscript && /*#__PURE__*/React.createElement("div", {
     style: {
       borderRadius: 10,
       overflow: "hidden",
@@ -1477,7 +1624,7 @@ function SummaryModal({
       marginBottom: 10
     }
   }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => setTranscriptOpen(o => !o),
+    onClick: toggleTranscript,
     style: {
       width: "100%",
       padding: "8px 12px",
@@ -1516,12 +1663,12 @@ function SummaryModal({
   }, /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 13,
-      color: C.text2,
+      color: transcriptState === "error" ? C.red : C.text2,
       lineHeight: 1.75,
       margin: 0,
       whiteSpace: "pre-wrap"
     }
-  }, transcript))), onDelete && !editing && /*#__PURE__*/React.createElement("button", {
+  }, transcript || (transcriptState === "error" ? "読み込めませんでした。閉じてもう一度開いてください。" : "読み込み中...")))), onDelete && !editing && /*#__PURE__*/React.createElement("button", {
     onClick: () => onDelete(item),
     style: {
       display: "flex",
@@ -1579,7 +1726,7 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
   // 最近の記録と相手の入力候補を、1回の履歴取得からまとめて作る
   const fetchRecent = useCallback(() => {
     if (!member) return;
-    gasGet({
+    gasPost({
       action: "getHistory",
       limit: PAGE_SIZE,
       offset: 0,
@@ -1598,7 +1745,7 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
   }, [fetchRecent]);
   // 処理待ち・処理中の記録があれば5秒おきに状態を確認し、終わったものから表示を
   // 切り替える。GAS側で固まった場合に備え約10分で打ち切る。
-  const pendingIds = recentRecs.filter(r => ["queued", "processing", "chunking"].includes(r.status)).map(r => r.id).join(",");
+  const pendingIds = recentRecs.filter(r => ["queued", "processing"].includes(r.status)).map(r => r.id).join(",");
   useEffect(() => {
     if (!pendingIds) {
       pollCountRef.current = 0;
@@ -1607,7 +1754,7 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
     if (pollCountRef.current >= 120) return;
     const t = setTimeout(async () => {
       pollCountRef.current += 1;
-      const results = await Promise.all(pendingIds.split(",").map(id => gasGet({
+      const results = await Promise.all(pendingIds.split(",").map(id => gasPost({
         action: "getRecordStatus",
         id
       }, 15000).then(d => [id, d]).catch(() => [id, null])));
@@ -1682,7 +1829,8 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
       member,
       interviewee: typedName,
       status: "queued",
-      sections: null
+      sections: null,
+      hasTranscript: true
     }, ...prev].slice(0, HOME_RECENT_COUNT));
     if (typedName) setNameCandidates(prev => uniqueNames([typedName, ...prev]));
     setTranscript("");
@@ -1963,7 +2111,7 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
     color: C.blue
   }))), recentRecs.map(rec => {
     const isError = rec.status === "error";
-    const isPending = ["queued", "processing", "chunking"].includes(rec.status);
+    const isPending = ["queued", "processing"].includes(rec.status);
     return /*#__PURE__*/React.createElement("button", {
       key: rec.id,
       onClick: () => setSelectedRec(rec),
@@ -2105,6 +2253,9 @@ const HELP_FAQ = [{
 }, {
   q: "長い会議を送れない",
   a: "1回に送れるのは3万文字（会話でおよそ1時間半〜2時間分）までです。録音を途中で区切って、何回かに分けてください。"
+}, {
+  q: "合言葉を聞かれた／分からない",
+  a: "記録を守るため、社内で共有されている合言葉が必要です。分からない場合は社内の担当者に確認してください。一度入力すれば、その端末では次から不要です（合言葉が変更された時だけ、もう一度入力します）。"
 }, {
   q: "表示がおかしい／新しい機能が出てこない",
   a: "メニューの「最新版に更新」を押してください。"
@@ -2401,17 +2552,34 @@ function HistoryScreen({
   const pollCountRef = useRef(0);
   const offsetRef = useRef(0),
     sentinelRef = useRef(null);
+  // 検索・絞り込みはGAS側で全件に対して行う（読み込み済みの分だけでなく古い記録も探せる）。
+  // 入力のたびに問い合わせないよう、打ち終わって少し待ってから検索する。
+  const [searchQ, setSearchQ] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setSearchQ(q.trim()), 400);
+    return () => clearTimeout(t);
+  }, [q]);
+  // 古い検索の結果が後から届いて、新しい結果を上書きしないようにする
+  const reqIdRef = useRef(0);
+  const buildParams = offset => {
+    const p = {
+      action: "getHistory",
+      member: memberFilter,
+      limit: PAGE_SIZE,
+      offset
+    };
+    if (searchQ) p.q = searchQ;
+    if (typeFilter !== "all") p.type = typeFilter;
+    return p;
+  };
   const fetchFirst = useCallback(async () => {
+    const reqId = ++reqIdRef.current;
     setLoading(true);
     setError(null);
     try {
-      const p = {
-        action: "getHistory",
-        limit: PAGE_SIZE,
-        offset: 0
-      };
-      if (memberFilter) p.member = memberFilter;
-      const d = await gasGet(p);
+      const d = await gasPost(buildParams(0));
+      if (reqId !== reqIdRef.current) return;
+      if (d.success === false) throw new Error(d.error);
       setRecords((d.records || []).map(r => ({
         ...r,
         sections: normalizeSections(r.sections)
@@ -2420,21 +2588,21 @@ function HistoryScreen({
       setHasMore(d.hasMore || false);
       offsetRef.current = PAGE_SIZE;
     } catch (e) {
+      if (reqId !== reqIdRef.current) return;
       setError("履歴を取得できませんでした。接続を確認してください。");
     }
     setLoading(false);
-  }, [memberFilter]);
+  }, [memberFilter, searchQ, typeFilter]);
   const fetchMore = async () => {
     if (moreLoading || !hasMore) return;
+    const reqId = reqIdRef.current;
     setMoreLoading(true);
     try {
-      const p = {
-        action: "getHistory",
-        limit: PAGE_SIZE,
-        offset: offsetRef.current
-      };
-      if (memberFilter) p.member = memberFilter;
-      const d = await gasGet(p);
+      const d = await gasPost(buildParams(offsetRef.current));
+      if (reqId !== reqIdRef.current) {
+        setMoreLoading(false);
+        return;
+      }
       setRecords(prev => {
         const ids = new Set(prev.map(r => r.id));
         return [...prev, ...(d.records || []).filter(r => !ids.has(r.id)).map(r => ({
@@ -2460,11 +2628,11 @@ function HistoryScreen({
     });
     ob.observe(sentinelRef.current);
     return () => ob.disconnect();
-  }, [hasMore, moreLoading]);
+  }, [hasMore, moreLoading, searchQ, typeFilter]);
   // 処理待ち・処理中の記録があれば5秒おきに状態を確認し、終わったものから
   // 表示を切り替える（以前は更新ボタンを押すまで「AI処理中」のままだった）。
   // GAS側で固まった場合に備え、約10分で確認を打ち切る。
-  const pendingIds = records.filter(r => ["queued", "processing", "chunking"].includes(r.status)).map(r => r.id).join(",");
+  const pendingIds = records.filter(r => ["queued", "processing"].includes(r.status)).map(r => r.id).join(",");
   useEffect(() => {
     if (!pendingIds) {
       pollCountRef.current = 0;
@@ -2473,7 +2641,7 @@ function HistoryScreen({
     if (pollCountRef.current >= 120) return;
     const t = setTimeout(async () => {
       pollCountRef.current += 1;
-      const results = await Promise.all(pendingIds.split(",").map(id => gasGet({
+      const results = await Promise.all(pendingIds.split(",").map(id => gasPost({
         action: "getRecordStatus",
         id
       }, 15000).then(d => [id, d]).catch(() => [id, null])));
@@ -2544,10 +2712,8 @@ function HistoryScreen({
       return next;
     });
   };
-  const matchesType = item => typeFilter === "all" || item.sections?.meetingType === typeFilter;
-  const matchesQuery = item => !q || (item.sections?._transcript || "").includes(q) || (item.sections?.sections || []).some(s => (s.items || []).some(i => i.includes(q))) || (item.interviewee || "").includes(q);
-  const filtered = records.filter(item => matchesType(item) && matchesQuery(item));
-  const isFiltering = !!q || typeFilter !== "all";
+  const filtered = records;
+  const isFiltering = !!searchQ || typeFilter !== "all";
   return /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
@@ -2587,7 +2753,7 @@ function HistoryScreen({
       padding: "2px 8px",
       borderRadius: 12
     }
-  }, "全", total, "件")), /*#__PURE__*/React.createElement("button", {
+  }, isFiltering ? "該当" : "全", total, "件")), /*#__PURE__*/React.createElement("button", {
     onClick: fetchFirst,
     disabled: loading,
     style: {
@@ -2715,11 +2881,11 @@ function HistoryScreen({
     style: {
       fontSize: 14
     }
-  }, records.length === 0 ? "まだ記録がありません" : "該当する記録がありません")), !loading && filtered.map((item, idx) => {
+  }, isFiltering ? "該当する記録がありません" : "まだ記録がありません")), !loading && filtered.map((item, idx) => {
     const group = dayGroupLabel(item.date);
     const showHeader = idx === 0 || dayGroupLabel(filtered[idx - 1].date) !== group;
     const isError = item.status === "error";
-    const isPending = ["queued", "processing", "chunking"].includes(item.status);
+    const isPending = ["queued", "processing"].includes(item.status);
     const dur = safeDur(item.duration);
     return /*#__PURE__*/React.createElement(React.Fragment, {
       key: item.id
@@ -2945,8 +3111,23 @@ function HistoryScreen({
 
 // ── APP ───────────────────────────────────────────────────
 function App() {
-  const [authed, setAuthed] = useState(() => lsGetAuth());
+  // 合言葉を導入する前からログインしていた端末は、合言葉を入れてもらうまでログイン画面にする
+  const [authed, setAuthed] = useState(() => lsGetAuth() && !!lsGetKey());
+  const [loginNotice, setLoginNotice] = useState(() => lsGetAuth() && !lsGetKey() ? "記録を守るため、合言葉が必要になりました。社内で共有されている合言葉を入力してください。" : "");
   const [currentUser, setCurrentUser] = useState(() => lsGetUser());
+  const authedRef = useRef(authed);
+  authedRef.current = authed;
+  // 使っている途中で合言葉が変わった（違うと言われた）ら、ログイン画面で入れ直してもらう
+  useEffect(() => {
+    const onAuthError = () => {
+      if (!authedRef.current) return;
+      setLoginNotice("合言葉が変更されたため、もう一度入力してください。");
+      setAuthed(false);
+      setDrawerOpen(false);
+    };
+    window.addEventListener(AUTH_ERROR_EVENT, onAuthError);
+    return () => window.removeEventListener(AUTH_ERROR_EVENT, onAuthError);
+  }, []);
   const [screen, setScreen] = useState("home");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
@@ -2974,6 +3155,7 @@ function App() {
   const handleLogin = u => {
     setCurrentUser(u);
     setMember(u.name || "");
+    setLoginNotice("");
     setAuthed(true);
   };
   const handleLogout = () => {
@@ -2995,7 +3177,8 @@ function App() {
       background: C.bg
     }
   }, /*#__PURE__*/React.createElement(LoginScreen, {
-    onLogin: handleLogin
+    onLogin: handleLogin,
+    notice: loginNotice
   }));
   return /*#__PURE__*/React.createElement("div", {
     style: {

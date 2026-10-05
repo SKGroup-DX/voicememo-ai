@@ -1,4 +1,4 @@
-\# VoiceMemo AI - プロジェクト概要
+\# ボイスメモ要約 - プロジェクト概要
 
 
 
@@ -12,13 +12,13 @@ URL: https://skgroup-dx.github.io/voicememo-ai/
 
 \## 技術スタック
 
-\- フロント: GitHub Pages上の単一HTMLファイル(バニラJS or React Babel standalone)
+\- フロント: GitHub Pages上の単一HTMLファイル（index.html。ReactをReact.createElementで直接書いている）
 
-\- バックエンド: Google Apps Script (GAS)
+\- バックエンド: Google Apps Script (GAS)。コードは gas/Code.gs と gas/appsscript.json に置き、Apps Scriptエディタへ貼り付けてデプロイする
 
-\- AI: Gemini API (gemini-3.5-flash/v1)
+\- AI: Gemini API (gemini-3.5-flash/v1)。APIキーではなくスクリプト所有者のOAuthトークンで呼ぶ（無料枠）
 
-\- データ保存: Google Sheets / Drive
+\- データ保存: Google Sheets（recordsシート）
 
 
 
@@ -30,19 +30,21 @@ URL: https://skgroup-dx.github.io/voicememo-ai/
 
 \- 日時はローカル時刻で組み立てる(UTCは使わない)
 
-\- 管理者PINは 3150(他アプリと共通)
-
 \- フォントは IBM Plex Sans JP / Noto Sans JP
+
+\- このリポジトリは公開されている。合言葉・プロジェクトID・APIキー等の秘密はコードやこのファイルに書かず、GASのスクリプトプロパティ（APP_PASSCODE、GCP_PROJECT_ID）にだけ置く
+
+\- アプリからGASへの呼び出しはすべてPOSTで、本文に合言葉（key）を入れる。GASは合言葉が違えば authError を返す
 
 
 
 \## 直近の変更履歴
 
-\- 主要バグ修正、コード全面再構築
+\- 社内共通の合言葉で記録を保護（合言葉なしでは履歴を読めない）
 
-\- 即時保存ロジック実装
+\- 不要になった音声・分割録音の仕組みを削除し、GASコードをリポジトリで管理
 
-\- Gemini API 503エラー時のリトライ処理実装
+\- 履歴一覧から文字起こし本文を外して軽量化、検索をGAS側で全件に対して行う
 
 
 
@@ -62,4 +64,3 @@ URL: https://skgroup-dx.github.io/voicememo-ai/
 \- git pushは必ず都度確認を取ってから実行する
 
 \- 複雑な変更は実装前にオプションA/B形式で提案し、承認を得てから進める
-
