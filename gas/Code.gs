@@ -220,149 +220,169 @@ function submitTranscript(body) {
 }
 
 // ================================================================
-// 受け付け済み（queued）の記録を1件、その場で要約する
+// 要約の処理の流れ（その場での要約と、1分おきの定期実行）
 // ================================================================
-// 定期実行と同時に動いても二重に処理しないよう、ロックの中で"queued"の場合だけ
-// "processing"に切り替えてから処理する（claimQueuedRowsと同じロックを使う）。
-// その場での要約は混雑時の待ち2秒で最大3回まで。それでも失敗したら"queued"に
-// 戻して定期実行に任せる（アプリ側の待ち上限90秒に収めるため）。
-const SUMMARIZE_SYNC_MAX_ATTEMPTS = 3;
-const SUMMARIZE_SYNC_RETRY_WAIT_SEC = 2;
+// 1件の記録を要約するのは、つねに「受け付け済み（queued）の行をロックの中で
+// processing に切り替えた処理」1つだけ。切り替えた時刻（処理開始時刻）を目印として
+// 覚えておき、終わったときに目印が自分のものの場合だけ状態を書き換える。
+// 以前は、その場での要約が失敗したときに状態を確かめずに queued に戻していたため、
+// 定期実行が処理している最中の記録を別の定期実行がもう一度拾って二重に要約し、
+// 先に完了した要約を後から「失敗」で上書きしてしまうことがあった。
+
+// その場での要約（アプリが受け付け直後に呼ぶ）。アプリの待ち上限90秒に収める。
+// 利用回数の上限（429）で10秒より長く待つよう言われたら、その場ではあきらめて
+// 定期実行に任せる（待つ間もGeminiの呼び出しを重ねると、上限にかかり続けるため）。
+const RETRY_POLICY_SYNC = { maxAttempts: 3, budgetMs: 60 * 1000, max429WaitSec: 10, serverErrorWaitSec: () => 2 };
+// 定期実行での要約。GASの実行時間上限（6分）に収まるよう、1件あたり最大4分。
+const RETRY_POLICY_BACKGROUND = { maxAttempts: 6, budgetMs: 4 * 60 * 1000, max429WaitSec: 60, serverErrorWaitSec: attempt => Math.min(attempt * 5, 20) };
+// 1回の定期実行で新しい記録を拾い始めるのは、開始からこの時間まで
+const RUN_PICKUP_LIMIT_MS = 60 * 1000;
 
 function processRecord(body) {
   const id = body.id ? String(body.id) : "";
   if (!id) return { success: false, error: "id required" };
   const auth = getGeminiAuth();
-  const job = claimQueuedRowById(id);
+  const job = claimQueuedRow_(id);
   if (!job) return { success: true, id, status: "skipped" };
   if (!job.transcript) {
-    updateRecord({ id, status: "error", processError: "文字起こしテキストがありません" });
+    finishJob_(job, { error: "文字起こしテキストがありません" });
     return { success: true, id, status: "error" };
   }
   try {
     const t0 = Date.now();
-    const sections = callGeminiSummarize(job.transcript, auth, SUMMARIZE_SYNC_MAX_ATTEMPTS, SUMMARIZE_SYNC_RETRY_WAIT_SEC);
+    const sections = callGeminiSummarize(job.transcript, auth, RETRY_POLICY_SYNC);
     console.log("[processRecord] 要約にかかった時間:", ((Date.now() - t0) / 1000).toFixed(1), "秒 ／ 文字数:", job.transcript.length, "／ 種別:", sections.meetingType || "不明");
-    updateRecord({ id, sections, status: "done", processError: "" });
+    finishJob_(job, { sections });
     return { success: true, id, status: "done", sections };
   } catch (e) {
-    console.error("[processRecord] その場での要約に失敗、定期実行に回す id:", id, e.message);
-    updateRecord({ id, status: "queued", processError: "" });
+    console.warn("[processRecord] その場での要約をあきらめ、定期実行に任せる id:", id, e.message);
+    finishJob_(job, { requeue: true });
     return { success: true, id, status: "queued" };
   }
 }
 
-// 指定idの行が"queued"なら"processing"に切り替えて内容を返す。それ以外はnull。
-function claimQueuedRowById(id) {
+// 定期実行（setupTriggersで1分おきに設定）。受け付け済みの記録を1件ずつ要約する。
+// 複数件たまっていても、拾い始めるのは開始から1分まで（長引いた分は次の回に回す）。
+function runPendingJobs() {
+  const startedAt = Date.now();
+  let auth;
+  try {
+    auth = getGeminiAuth();
+  } catch (e) {
+    console.error("[runPendingJobs] 認証情報を用意できないため中断:", e.message);
+    return;
+  }
+  while (Date.now() - startedAt < RUN_PICKUP_LIMIT_MS) {
+    const job = claimQueuedRow_(null);
+    if (!job) return;
+    try {
+      if (!job.transcript) throw new Error("文字起こしテキストがありません");
+      console.log("[runPendingJobs] 要約開始 id:", job.id);
+      const sections = callGeminiSummarize(job.transcript, auth, RETRY_POLICY_BACKGROUND);
+      const result = finishJob_(job, { sections });
+      console.log("[runPendingJobs] 完了 id:", job.id, "（" + result + "）");
+    } catch (e) {
+      const result = finishJob_(job, { error: e.message });
+      console.error("[runPendingJobs] 失敗 id:", job.id, e.message, "（" + result + "）");
+    }
+  }
+}
+
+// queuedの行を1件選んでprocessingに切り替え、内容と目印を返す（なければnull）。
+// idを指定するとその行だけを対象にする。
+function claimQueuedRow_(id) {
   const lock = LockService.getScriptLock();
   let gotLock = false;
   try {
     gotLock = lock.tryLock(10000);
   } catch (e) {}
-  if (!gotLock) return null; // 取れなければ定期実行に任せる
+  if (!gotLock) return null; // 取れなければ次の機会（定期実行）に任せる
   try {
     const sheet = recordsSheet();
-    const row = findRecordRowById(sheet, id);
-    if (row < 0) return null;
-    const values = sheet.getRange(row, 1, 1, NUM_COLS).getValues()[0];
-    if (String(values[COL.STATUS - 1] || "") !== "queued") return null;
+    let row = -1;
+    let values = null;
+    if (id) {
+      row = findRecordRowById(sheet, id);
+      if (row >= 0) values = sheet.getRange(row, 1, 1, NUM_COLS).getValues()[0];
+    } else {
+      const rows = readAllRows();
+      for (let i = 0; i < rows.length; i++) {
+        if (String(rows[i][COL.STATUS - 1] || "") === "queued") {
+          row = HEADER_ROW + 1 + i;
+          values = rows[i];
+          break;
+        }
+      }
+    }
+    if (row < 0 || String(values[COL.STATUS - 1] || "") !== "queued") return null;
     sheet.getRange(row, COL.STATUS).setValue("processing");
-    sheet.getRange(row, COL.PROCESSING_STARTED_AT).setValue(new Date());
+    const startedCell = sheet.getRange(row, COL.PROCESSING_STARTED_AT);
+    startedCell.setValue(new Date());
     return {
-      row,
-      transcript: rowTranscript(values)
+      id: String(values[COL.ID - 1]),
+      transcript: rowTranscript(values),
+      // シートに入った値を読み直して目印にする（書いた値と読み直した値の微妙な違いで
+      // 自分の目印を見失わないように）
+      token: toMillis_(startedCell.getValue())
     };
   } finally {
     lock.releaseLock();
   }
 }
 
-// ================================================================
-// 処理の再試行（保存済みの文字起こしをそのまま使い直す）
-// ================================================================
-function retryRecord(body) {
-  const { id } = body;
-  if (!id) return { success: false, error: "id required" };
-  const upd = updateRecord({ id, status: "queued", processError: "" });
-  if (upd.success) console.log("[retryRecord] 再受け付け完了 id:", id);
-  return upd;
-}
-
-// ================================================================
-// 定期実行（setupTriggersで1分おきに設定）
-// ================================================================
-// status="queued"の行をまとめて要約する。ロックは「どの行を自分が処理するか
-// 確定する」短い区間だけで持ち、時間のかかるGemini呼び出しはロックの外で行う。
-function runPendingJobs() {
-  const claimed = claimQueuedRows();
-  if (!claimed.length) return;
-
-  let auth;
-  try {
-    auth = getGeminiAuth();
-  } catch (e) {
-    console.error("[runPendingJobs] 認証情報を用意できないため中断:", e.message);
-    revertClaimed(claimed);
-    return;
-  }
-
-  const sheet = recordsSheet();
-  claimed.forEach(job => {
-    try {
-      if (!job.transcript) throw new Error("文字起こしテキストがありません");
-      console.log("[runPendingJobs] 要約開始 id:", job.id);
-      const sections = callGeminiSummarize(job.transcript, auth);
-      sheet.getRange(job.row, COL.SECTIONS).setValue(JSON.stringify(sections));
-      sheet.getRange(job.row, COL.STATUS).setValue("done");
-      sheet.getRange(job.row, COL.PROCESS_ERROR).setValue("");
-      console.log("[runPendingJobs] 完了 id:", job.id);
-    } catch (e) {
-      console.error("[runPendingJobs] 失敗 id:", job.id, e.message);
-      sheet.getRange(job.row, COL.STATUS).setValue("error");
-      sheet.getRange(job.row, COL.PROCESS_ERROR).setValue(e.message);
+// 要約の結果を書き込む。outcome は { sections } | { requeue: true } | { error: "..." }。
+// 要約できた場合は、まだ完了になっていなければ（二重に処理された場合も）書き込む。
+// 戻す・失敗にするのは、その行を今も自分が処理している場合だけ。
+function finishJob_(job, outcome) {
+  return withShortLock(() => {
+    const sheet = recordsSheet();
+    const row = findRecordRowById(sheet, job.id);
+    if (row < 0) return "削除済み";
+    const values = sheet.getRange(row, 1, 1, NUM_COLS).getValues()[0];
+    const status = String(values[COL.STATUS - 1] || "");
+    if (outcome.sections) {
+      if (status === "done") return "完了済みのため書き込まず";
+      sheet.getRange(row, COL.SECTIONS).setValue(JSON.stringify(stripTranscript(outcome.sections)));
+      sheet.getRange(row, COL.STATUS).setValue("done");
+      sheet.getRange(row, COL.PROCESS_ERROR).setValue("");
+      return "完了";
     }
+    const mine = status === "processing" && Math.abs(toMillis_(values[COL.PROCESSING_STARTED_AT - 1]) - job.token) < 1000;
+    if (!mine) return "他の処理が担当中のため書き込まず";
+    if (outcome.requeue) {
+      sheet.getRange(row, COL.STATUS).setValue("queued");
+      return "要約待ちに戻した";
+    }
+    sheet.getRange(row, COL.STATUS).setValue("error");
+    sheet.getRange(row, COL.PROCESS_ERROR).setValue(outcome.error || "不明なエラー");
+    return "失敗として記録";
   });
 }
 
-// status="queued"の行を見つけて"processing"に変え、対象一覧を返す。
-// ロックを取っている間はシートの読み書きのみで、Gemini呼び出しは一切行わない。
-function claimQueuedRows() {
-  const lock = LockService.getScriptLock();
-  let gotLock = false;
-  try {
-    gotLock = lock.tryLock(5000);
-  } catch (e) {}
-  if (!gotLock) {
-    console.log("[claimQueuedRows] ロック取得失敗、次回の定期実行に回します");
-    return [];
-  }
-  try {
-    const sheet = recordsSheet();
-    const allRows = readAllRows();
-    const claimed = [];
-    for (let i = 0; i < allRows.length; i++) {
-      const row = allRows[i];
-      if (String(row[COL.STATUS - 1] || "") !== "queued") continue;
-      const targetRow = HEADER_ROW + 1 + i;
-      sheet.getRange(targetRow, COL.STATUS).setValue("processing");
-      sheet.getRange(targetRow, COL.PROCESSING_STARTED_AT).setValue(new Date());
-      claimed.push({
-        row: targetRow,
-        id: String(row[COL.ID - 1] || ""),
-        transcript: rowTranscript(row)
-      });
-    }
-    return claimed;
-  } finally {
-    lock.releaseLock();
-  }
+function toMillis_(v) {
+  if (v instanceof Date) return v.getTime();
+  const n = Number(v);
+  return isFinite(n) ? n : 0;
 }
 
-// GCP_PROJECT_ID未設定などで処理を始められなかった場合、"processing"のまま
-// 固まらないよう"queued"に戻して後で再試行できるようにする。
-function revertClaimed(claimed) {
-  const sheet = recordsSheet();
-  claimed.forEach(job => sheet.getRange(job.row, COL.STATUS).setValue("queued"));
+// ================================================================
+// 処理の再試行（保存済みの文字起こしをそのまま使い直す）
+// ================================================================
+// 失敗した記録だけを要約待ちに戻す（処理中・完了の記録には何もしない）。
+function retryRecord(body) {
+  const id = body.id ? String(body.id) : "";
+  if (!id) return { success: false, error: "id required" };
+  return withShortLock(() => {
+    const sheet = recordsSheet();
+    const row = findRecordRowById(sheet, id);
+    if (row < 0) return { success: false, error: "Record not found: " + id };
+    const status = String(sheet.getRange(row, COL.STATUS).getValue() || "");
+    if (status !== "error") return { success: true, status };
+    sheet.getRange(row, COL.STATUS).setValue("queued");
+    sheet.getRange(row, COL.PROCESS_ERROR).setValue("");
+    console.log("[retryRecord] 再受け付け完了 id:", id);
+    return { success: true, status: "queued" };
+  });
 }
 
 // 対話的な操作向けの短時間ロック。数百ms〜数秒で終わる想定なので、ロックが
@@ -383,54 +403,75 @@ function withShortLock(fn) {
 // ================================================================
 // Gemini API 呼び出し共通ヘルパー
 // ================================================================
-// 429/500/502/503/504 は一時的な過負荷・レート制限とみなしリトライ（最大5回・指数バックオフ）。
-// 待機時間の上限は30秒に抑えて、GASの実行時間上限（6分）に収める。
-const RETRYABLE_CODES = [429, 500, 502, 503, 504];
+// 429 は「短時間に使える回数の上限」。Geminiが返す「◯秒後に再開できる」
+// (RetryInfo) に従って待つ。待たずに呼び直しても上限にかかり続けるだけのため。
+// 500/502/503/504 は一時的な混雑とみなし、少し待ってやり直す。
+const RETRYABLE_SERVER_CODES = [500, 502, 503, 504];
 // HTTPステータスは200（正常応答）でも、finishReasonが不安定でテキストが
 // 返らないことがある。MALFORMED_RESPONSEは同じ入力でも再試行すると
-// 直ることがあるため、HTTPエラーと同様にリトライ対象とする。
+// 直ることがあるため、混雑と同様にやり直す。
 const RETRYABLE_FINISH_REASONS = ["MALFORMED_RESPONSE"];
-const GEMINI_MAX_ATTEMPTS = 5;
+const DEFAULT_429_WAIT_SEC = 15;
 
-// retryWaitSecを指定すると、混雑時の再試行までの待ち時間を固定にする
-// （指定しなければ8秒・16秒…と延ばしていく。定期実行ではこちらを使う）。
-function fetchGeminiWithRetry(url, payload, label, auth, maxAttempts, retryWaitSec) {
-  const limit = maxAttempts || GEMINI_MAX_ATTEMPTS;
-  let resCode, resText;
-  for (let attempt = 1; attempt <= limit; attempt++) {
+function fetchGeminiWithRetry(url, payload, label, auth, policy) {
+  const p = policy || RETRY_POLICY_BACKGROUND;
+  const deadline = Date.now() + p.budgetMs;
+  let resText;
+  for (let attempt = 1; ; attempt++) {
     const res = UrlFetchApp.fetch(url, makeOptions(payload, auth));
-    resCode = res.getResponseCode();
+    const resCode = res.getResponseCode();
     resText = res.getContentText();
     console.log("[" + label + " API] attempt:", attempt, "status:", resCode);
 
-    let retryReason = null;
-    if (RETRYABLE_CODES.indexOf(resCode) !== -1) {
-      retryReason = "HTTP " + resCode;
-    } else if (resCode === 200) {
-      try {
-        const data = JSON.parse(resText);
-        const finishReason = data.candidates && data.candidates[0] && data.candidates[0].finishReason;
-        if (finishReason && RETRYABLE_FINISH_REASONS.indexOf(finishReason) !== -1) {
-          retryReason = "finishReason=" + finishReason;
-        }
-      } catch (e) {
-        // JSON解析失敗はここではリトライ対象にせず、extractGeminiText側の
-        // エラーメッセージに委ねる
+    let waitSec = 0;
+    let busyMessage = "";
+    if (resCode === 429) {
+      const info = parseRateLimit_(resText);
+      console.warn("[" + label + " API] 429の詳細:", info.message);
+      waitSec = info.retryDelaySec || DEFAULT_429_WAIT_SEC;
+      busyMessage = "AIの利用回数が上限に達しています（無料枠）。少し時間をおいて再試行してください。";
+      if (waitSec > p.max429WaitSec) {
+        throw new Error(busyMessage + "（再開まで約" + Math.ceil(waitSec) + "秒）");
       }
+    } else if (RETRYABLE_SERVER_CODES.indexOf(resCode) !== -1 || isRetryableFinish_(resCode, resText)) {
+      waitSec = p.serverErrorWaitSec(attempt);
+      busyMessage = "AIが混み合っています（" + (resCode === 200 ? "応答の形式エラー" : "HTTP " + resCode) + "）。少し時間をおいて再試行してください。";
+    } else {
+      return resText;
     }
 
-    if (retryReason) {
-      if (attempt < limit) {
-        const waitSec = retryWaitSec || Math.min(attempt * 8, 30);
-        console.log("[" + label + " API] " + retryReason + " → " + waitSec + "秒後にリトライ");
-        Utilities.sleep(waitSec * 1000);
-        continue;
-      }
-      throw new Error(label + "APIエラー（" + retryReason + "）: リトライ上限に達しました。しばらくしてから再試行してください。");
+    if (attempt >= p.maxAttempts || Date.now() + waitSec * 1000 > deadline) {
+      throw new Error(busyMessage);
     }
-    break;
+    console.log("[" + label + " API] " + waitSec + "秒後にやり直し");
+    Utilities.sleep(waitSec * 1000);
   }
-  return resText;
+}
+
+function isRetryableFinish_(resCode, resText) {
+  if (resCode !== 200) return false;
+  try {
+    const data = JSON.parse(resText);
+    const finishReason = data.candidates && data.candidates[0] && data.candidates[0].finishReason;
+    return !!finishReason && RETRYABLE_FINISH_REASONS.indexOf(finishReason) !== -1;
+  } catch (e) {
+    // JSON解析失敗はここではやり直さず、extractGeminiText側のエラーメッセージに委ねる
+    return false;
+  }
+}
+
+// 429の応答から、上限の種類（メッセージ）と再開までの秒数を取り出す
+function parseRateLimit_(resText) {
+  try {
+    let data = JSON.parse(resText);
+    if (Array.isArray(data)) data = data[0];
+    const err = (data && data.error) || {};
+    const retryInfo = (err.details || []).filter(d => String(d["@type"] || "").indexOf("RetryInfo") !== -1)[0];
+    const sec = retryInfo ? parseFloat(String(retryInfo.retryDelay || "")) : NaN;
+    return { message: String(err.message || "").slice(0, 400), retryDelaySec: isFinite(sec) ? Math.ceil(sec) : 0 };
+  } catch (e) {
+    return { message: String(resText || "").slice(0, 400), retryDelaySec: 0 };
+  }
 }
 
 function extractGeminiText(resText, label) {
@@ -466,7 +507,7 @@ const SUMMARIZE_FAST_CONFIG = {
   thinkingConfig: { thinkingLevel: "low" }
 };
 
-function callGeminiSummarize(transcript, auth, maxAttempts, retryWaitSec) {
+function callGeminiSummarize(transcript, auth, policy) {
   const url = GEMINI_API_BASE + GEMINI_MODEL + ":generateContent";
 
   const prompt = getDefaultSystemPrompt() + "\n\n【文字起こし内容】\n" + transcript;
@@ -478,12 +519,12 @@ function callGeminiSummarize(transcript, auth, maxAttempts, retryWaitSec) {
 
   let jsonText;
   try {
-    const resText = fetchGeminiWithRetry(url, buildPayload(Object.assign({}, baseConfig, SUMMARIZE_FAST_CONFIG)), "要約", auth, maxAttempts, retryWaitSec);
+    const resText = fetchGeminiWithRetry(url, buildPayload(Object.assign({}, baseConfig, SUMMARIZE_FAST_CONFIG)), "要約", auth, policy);
     jsonText = extractGeminiText(resText, "要約");
   } catch (e) {
     if (e.message.indexOf("APIエラー 400") === -1) throw e;
     console.warn("[要約] 高速化の設定が受け付けられなかったため、従来の設定でやり直します:", e.message);
-    const resText = fetchGeminiWithRetry(url, buildPayload(baseConfig), "要約", auth, maxAttempts, retryWaitSec);
+    const resText = fetchGeminiWithRetry(url, buildPayload(baseConfig), "要約", auth, policy);
     jsonText = extractGeminiText(resText, "要約");
   }
 
