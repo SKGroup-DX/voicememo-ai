@@ -471,19 +471,49 @@ function normalizeSections(s) {
   }
   return s || null;
 }
-function relDate(s) {
-  if (!s) return "";
-  const d = new Date(s);
-  if (isNaN(d.getTime())) return String(s);
-  if (d.getFullYear() < 1970) return "";
+// 記録の日時はシートから「Sun Oct 04 2026 06:56:56 GMT+0900 (日本標準時)」のような形で
+// 返ってくる。末尾の括弧書きや「2026-10-04 06:56:56」のような空白区切りの形式は
+// ブラウザによって読めないことがあるため、読める形に整えてから変換する。
+function parseRecDate(s) {
+  if (!s) return null;
+  let str = String(s).replace(/\s*\([^)]*\)\s*$/, "");
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(str)) str = str.replace(" ", "T");
+  const d = new Date(str);
+  return isNaN(d.getTime()) || d.getFullYear() < 1970 ? null : d;
+}
+function daysAgo(d) {
   const now = new Date();
   const toDay = v => new Date(v.getFullYear(), v.getMonth(), v.getDate()).getTime();
-  const diff = Math.round((toDay(now) - toDay(d)) / 86400000);
-  const t = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  return Math.round((toDay(now) - toDay(d)) / 86400000);
+}
+function hhmm(d) {
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+function relDate(s) {
+  const d = parseRecDate(s);
+  if (!d) return "";
+  const diff = daysAgo(d);
+  const t = hhmm(d);
   if (diff === 0) return `今日 ${t}`;
   if (diff === 1) return `昨日 ${t}`;
   if (diff < 7) return `${diff}日前 ${t}`;
   return `${d.getMonth() + 1}/${d.getDate()} ${t}`;
+}
+// 履歴を日付ごとにまとめるときの見出し
+function dayGroupLabel(s) {
+  const d = parseRecDate(s);
+  if (!d) return "日付不明";
+  const diff = daysAgo(d);
+  if (diff <= 0) return "今日";
+  if (diff === 1) return "昨日";
+  if (diff < 7) return "過去7日間";
+  return `${d.getFullYear()}年${d.getMonth() + 1}月`;
+}
+// 見出しで日付が分かるので、今日・昨日のカードは時刻だけにする
+function cardTime(s) {
+  const d = parseRecDate(s);
+  if (!d) return "";
+  return daysAgo(d) <= 1 ? hhmm(d) : `${d.getMonth() + 1}/${d.getDate()} ${hhmm(d)}`;
 }
 function safeDur(s) {
   if (!s) return "";
@@ -832,7 +862,8 @@ function Drawer({
 function SummaryModal({
   item,
   onClose,
-  onSaved
+  onSaved,
+  onDelete
 }) {
   const [collapsed, setCollapsed] = useState(new Set());
   const [editing, setEditing] = useState(false);
@@ -1308,7 +1339,28 @@ function SummaryModal({
       textAlign: "center",
       marginTop: 10
     }
-  }, msg)))));
+  }, msg), onDelete && !editing && /*#__PURE__*/React.createElement("button", {
+    onClick: () => onDelete(item),
+    style: {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 6,
+      width: "100%",
+      marginTop: 18,
+      padding: "11px",
+      background: "none",
+      border: `1px solid ${C.red}30`,
+      borderRadius: 12,
+      fontSize: 13,
+      color: C.red,
+      cursor: "pointer"
+    }
+  }, /*#__PURE__*/React.createElement(Ic, {
+    n: "trash",
+    size: 13,
+    color: C.red
+  }), "この記録を削除")))));
 }
 
 // ── HOME SCREEN ───────────────────────────────────────────
@@ -1788,6 +1840,23 @@ function HelpScreen() {
 }
 
 // ── HISTORY SCREEN ────────────────────────────────────────
+function TypeBadge({
+  type
+}) {
+  if (type !== "1on1" && type !== "group") return null;
+  const color = type === "1on1" ? C.purple : C.green;
+  return /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 10,
+      fontWeight: 700,
+      padding: "2px 7px",
+      borderRadius: 6,
+      flexShrink: 0,
+      background: `${color}18`,
+      color
+    }
+  }, type === "1on1" ? "1on1" : "会議");
+}
 function HistoryScreen({
   memberFilter
 }) {
@@ -1802,6 +1871,9 @@ function HistoryScreen({
   const [delTarget, setDelTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
   const [retryingIds, setRetryingIds] = useState(new Set());
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [pollTick, setPollTick] = useState(0);
+  const pollCountRef = useRef(0);
   const offsetRef = useRef(0),
     sentinelRef = useRef(null);
   const fetchFirst = useCallback(async () => {
@@ -1864,6 +1936,37 @@ function HistoryScreen({
     ob.observe(sentinelRef.current);
     return () => ob.disconnect();
   }, [hasMore, moreLoading]);
+  // 処理待ち・処理中の記録があれば5秒おきに状態を確認し、終わったものから
+  // 表示を切り替える（以前は更新ボタンを押すまで「AI処理中」のままだった）。
+  // GAS側で固まった場合に備え、約10分で確認を打ち切る。
+  const pendingIds = records.filter(r => ["queued", "processing", "chunking"].includes(r.status)).map(r => r.id).join(",");
+  useEffect(() => {
+    if (!pendingIds) {
+      pollCountRef.current = 0;
+      return;
+    }
+    if (pollCountRef.current >= 120) return;
+    const t = setTimeout(async () => {
+      pollCountRef.current += 1;
+      const results = await Promise.all(pendingIds.split(",").map(id => gasGet({
+        action: "getRecordStatus",
+        id
+      }, 15000).then(d => [id, d]).catch(() => [id, null])));
+      const byId = new Map(results.filter(([, d]) => d && d.found));
+      setRecords(prev => prev.map(r => {
+        const d = byId.get(r.id);
+        if (!d) return r;
+        return {
+          ...r,
+          status: d.status,
+          processError: d.error || "",
+          sections: d.status === "done" ? normalizeSections(d.sections) : r.sections
+        };
+      }));
+      setPollTick(n => n + 1);
+    }, 5000);
+    return () => clearTimeout(t);
+  }, [pendingIds, pollTick]);
   const doDelete = async () => {
     if (!delTarget) return;
     setDeleting(true);
@@ -1901,7 +2004,10 @@ function HistoryScreen({
       return next;
     });
   };
-  const filtered = records.filter(item => !q || (item.sections?._transcript || "").includes(q) || (item.sections?.sections || []).some(s => (s.items || []).some(i => i.includes(q))) || (item.member || "").includes(q) || (item.interviewee || "").includes(q));
+  const matchesType = item => typeFilter === "all" || item.sections?.meetingType === typeFilter;
+  const matchesQuery = item => !q || (item.sections?._transcript || "").includes(q) || (item.sections?.sections || []).some(s => (s.items || []).some(i => i.includes(q))) || (item.interviewee || "").includes(q);
+  const filtered = records.filter(item => matchesType(item) && matchesQuery(item));
+  const isFiltering = !!q || typeFilter !== "all";
   return /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
@@ -1933,7 +2039,7 @@ function HistoryScreen({
       fontWeight: 700,
       color: C.text
     }
-  }, "録音履歴"), !loading && total > 0 && /*#__PURE__*/React.createElement("span", {
+  }, "履歴"), !loading && total > 0 && /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 12,
       color: C.text2,
@@ -2007,7 +2113,26 @@ function HistoryScreen({
     n: "xmark",
     size: 13,
     color: C.text2
-  })))), /*#__PURE__*/React.createElement("div", {
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      marginBottom: 10
+    }
+  }, [["all", "すべて"], ["1on1", "1on1"], ["group", "会議"]].map(([key, label]) => /*#__PURE__*/React.createElement("button", {
+    key: key,
+    onClick: () => setTypeFilter(key),
+    style: {
+      padding: "6px 14px",
+      borderRadius: 16,
+      fontSize: 13,
+      fontWeight: 600,
+      border: `1px solid ${typeFilter === key ? C.blue : C.sep}`,
+      background: typeFilter === key ? C.blue : C.surface,
+      color: typeFilter === key ? "#fff" : C.text2,
+      cursor: "pointer"
+    }
+  }, label)))), /*#__PURE__*/React.createElement("div", {
     style: {
       flex: 1,
       overflowY: "auto",
@@ -2050,129 +2175,116 @@ function HistoryScreen({
     style: {
       fontSize: 14
     }
-  }, records.length === 0 ? "まだ記録がありません" : "該当する記録がありません")), !loading && filtered.map(item => /*#__PURE__*/React.createElement("div", {
-    key: item.id,
-    style: {
-      background: C.surface,
-      borderRadius: 14,
-      border: `1px solid ${C.sep}`,
-      boxShadow: "0 1px 3px rgba(0,0,0,.04)",
-      display: "flex",
-      alignItems: "center",
-      marginBottom: 8
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => setSelected(item),
-    style: {
-      flex: 1,
-      padding: "13px 0 13px 14px",
-      textAlign: "left",
-      cursor: "pointer",
-      background: "none",
-      border: "none",
-      minWidth: 0
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      alignItems: "center",
-      gap: 5,
-      marginBottom: 3,
-      flexWrap: "wrap"
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 13,
-      fontWeight: 600,
-      color: C.text
-    }
-  }, item.member), item.interviewee && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 11,
+  }, records.length === 0 ? "まだ記録がありません" : "該当する記録がありません")), !loading && filtered.map((item, idx) => {
+    const group = dayGroupLabel(item.date);
+    const showHeader = idx === 0 || dayGroupLabel(filtered[idx - 1].date) !== group;
+    const isError = item.status === "error";
+    const isPending = ["queued", "processing", "chunking"].includes(item.status);
+    const dur = safeDur(item.duration);
+    return /*#__PURE__*/React.createElement(React.Fragment, {
+      key: item.id
+    }, showHeader && /*#__PURE__*/React.createElement("p", {
+      style: {
+        fontSize: 12,
+        fontWeight: 600,
+        color: C.text2,
+        margin: idx === 0 ? "2px 4px 8px" : "18px 4px 8px"
+      }
+    }, group), /*#__PURE__*/React.createElement("div", {
+      style: {
+        background: C.surface,
+        borderRadius: 14,
+        border: `1px solid ${C.sep}`,
+        boxShadow: "0 1px 3px rgba(0,0,0,.04)",
+        display: "flex",
+        alignItems: "stretch",
+        marginBottom: 8
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      onClick: () => setSelected(item),
+      style: {
+        flex: 1,
+        padding: "12px 14px",
+        textAlign: "left",
+        cursor: "pointer",
+        background: "none",
+        border: "none",
+        minWidth: 0,
+        display: "flex",
+        alignItems: "center",
+        gap: 10
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 0
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        marginBottom: 4
+      }
+    }, /*#__PURE__*/React.createElement(TypeBadge, {
+      type: item.sections?.meetingType
+    }), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 15,
+        fontWeight: 600,
+        color: item.interviewee ? C.text : C.text2,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        minWidth: 0
+      }
+    }, item.interviewee || "相手未入力"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: C.text2,
+        marginLeft: "auto",
+        flexShrink: 0
+      }
+    }, cardTime(item.date), dur ? " · " + dur : "")), /*#__PURE__*/React.createElement("p", {
+      style: {
+        fontSize: 12,
+        color: isError ? C.red : C.text2,
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis"
+      }
+    }, isError ? "処理に失敗しました: " + (item.processError || "不明なエラー") : isPending ? "AI処理中..." : item.sections?.sections?.[0]?.items?.[0] || "")), !isError && /*#__PURE__*/React.createElement(Ic, {
+      n: "chevron-right",
+      size: 12,
       color: C.text2
-    }
-  }, "→"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 11,
-      fontWeight: 500,
-      color: C.purple
-    }
-  }, item.interviewee)), safeDur(item.duration) && /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 10,
-      color: C.text2,
-      background: C.bg,
-      padding: "1px 6px",
-      borderRadius: 4,
-      marginLeft: "auto",
-      flexShrink: 0
-    }
-  }, safeDur(item.duration))), /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 11,
-      color: C.text2,
-      marginBottom: 2
-    }
-  }, relDate(item.date)), item.status === "error" ? /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 11,
-      color: C.red,
-      whiteSpace: "nowrap",
-      overflow: "hidden",
-      textOverflow: "ellipsis"
-    }
-  }, "処理に失敗しました: ", item.processError || "不明なエラー") : ["queued", "processing", "chunking"].includes(item.status) ? /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 11,
-      color: C.text2
-    }
-  }, "AI処理中...") : item.sections?.sections?.[0]?.items?.[0] && /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 11,
-      color: C.text2,
-      whiteSpace: "nowrap",
-      overflow: "hidden",
-      textOverflow: "ellipsis"
-    }
-  }, item.sections.sections[0].items[0])), item.status === "error" && /*#__PURE__*/React.createElement("button", {
-    onClick: () => doRetry(item),
-    disabled: retryingIds.has(item.id),
-    style: {
-      padding: "0 14px",
-      height: "100%",
-      minHeight: 72,
-      display: "flex",
-      alignItems: "center",
-      background: "none",
-      border: "none",
-      cursor: retryingIds.has(item.id) ? "default" : "pointer",
-      flexShrink: 0,
-      borderLeft: `1px solid ${C.sep}`
-    }
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: retryingIds.has(item.id) ? "spinner" : "rotate-right",
-    size: 14,
-    color: C.purple,
-    cls: retryingIds.has(item.id) ? "spin" : ""
-  })), /*#__PURE__*/React.createElement("button", {
-    onClick: () => setDelTarget(item),
-    style: {
-      padding: "0 14px",
-      height: "100%",
-      minHeight: 72,
-      display: "flex",
-      alignItems: "center",
-      background: "none",
-      border: "none",
-      cursor: "pointer",
-      flexShrink: 0,
-      borderLeft: `1px solid ${C.sep}`
-    }
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: "trash",
-    size: 14,
-    color: C.text2
-  })))), /*#__PURE__*/React.createElement("div", {
+    })), isError && /*#__PURE__*/React.createElement("button", {
+      onClick: () => doRetry(item),
+      disabled: retryingIds.has(item.id),
+      style: {
+        padding: "0 14px",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 3,
+        background: "none",
+        border: "none",
+        cursor: retryingIds.has(item.id) ? "default" : "pointer",
+        flexShrink: 0,
+        borderLeft: `1px solid ${C.sep}`
+      }
+    }, /*#__PURE__*/React.createElement(Ic, {
+      n: retryingIds.has(item.id) ? "spinner" : "rotate-right",
+      size: 14,
+      color: C.purple,
+      cls: retryingIds.has(item.id) ? "spin" : ""
+    }), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 10,
+        color: C.purple
+      }
+    }, "再試行"))));
+  }), /*#__PURE__*/React.createElement("div", {
     ref: sentinelRef,
     style: {
       height: 1
@@ -2191,7 +2303,7 @@ function HistoryScreen({
     size: 13,
     color: C.text2,
     cls: "spin"
-  }), "読み込み中..."), !hasMore && records.length > 0 && !q && /*#__PURE__*/React.createElement("p", {
+  }), "読み込み中..."), !hasMore && records.length > 0 && !isFiltering && /*#__PURE__*/React.createElement("p", {
     style: {
       textAlign: "center",
       fontSize: 12,
@@ -2273,6 +2385,10 @@ function HistoryScreen({
   }, deleting ? "削除中..." : "削除する")))), selected && /*#__PURE__*/React.createElement(SummaryModal, {
     item: selected,
     onClose: () => setSelected(null),
+    onDelete: item => {
+      setSelected(null);
+      setDelTarget(item);
+    },
     onSaved: secs => {
       setSelected(s => ({
         ...s,
