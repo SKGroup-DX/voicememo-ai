@@ -1,7 +1,7 @@
-// VoiceMemo AI - Service Worker
+// ボイスメモ要約 - Service Worker
 // キャッシュ戦略: 画面本体(HTML)はネットワーク優先、アイコン等はキャッシュ優先
 
-const CACHE_NAME = 'voicememo-ai-v9';
+const CACHE_NAME = 'voicememo-ai-v10'; // manifest.json と アイコンの参照を変えたので更新
 
 // キャッシュするアセット
 const ASSETS = [
