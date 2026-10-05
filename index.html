@@ -1776,6 +1776,90 @@ function uniqueNames(names) {
   });
   return out;
 }
+// 「要約する」を押した後の案内。受け付け直後は「要約しています」、終わったら
+// 「要約ができました」と［要約を見る］に切り替える（以前は「受け付けました」のまま
+// 変わらず、要約が終わったのか分かりにくかった）。
+function SubmitProgress({ rec, onOpen, onShowHistory, onClose }) {
+  const done = rec.status === "done";
+  const failed = rec.status === "error";
+  const color = done ? C.green : failed ? C.red : C.blue;
+  const actionBtn = (label, onClick) => /*#__PURE__*/React.createElement("button", {
+    onClick,
+    style: {
+      marginTop: 8,
+      padding: "7px 14px",
+      borderRadius: 8,
+      border: "none",
+      background: color,
+      color: "#fff",
+      fontSize: 13,
+      fontWeight: 600,
+      cursor: "pointer",
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 4
+    }
+  }, label, /*#__PURE__*/React.createElement(Ic, {
+    n: "chevron-right",
+    size: 11,
+    color: "#fff"
+  }));
+  return /*#__PURE__*/React.createElement("div", {
+    role: "status",
+    style: {
+      display: "flex",
+      alignItems: "flex-start",
+      gap: 8,
+      background: `${color}14`,
+      border: `1px solid ${color}40`,
+      borderRadius: 10,
+      padding: "10px 11px",
+      marginBottom: 10,
+      color: C.text
+    }
+  }, /*#__PURE__*/React.createElement(Ic, {
+    n: done ? "circle-check" : failed ? "circle-exclamation" : "spinner",
+    size: 15,
+    color: color,
+    cls: done || failed ? "" : "spin",
+    style: {
+      marginTop: 2
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 14,
+      fontWeight: 600,
+      lineHeight: 1.5
+    }
+  }, done ? "要約ができました" : failed ? "要約できませんでした" : "受け付けました。AIが要約しています…"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: failed ? C.red : C.text2,
+      lineHeight: 1.6,
+      marginTop: 2,
+      overflow: "hidden",
+      textOverflow: "ellipsis"
+    }
+  }, done ? (rec.interviewee ? rec.interviewee + "との" : "") + (rec.sections?.meetingType === "group" ? "会議" : "面談") + "の要約を、履歴に保存しました。" : failed ? rec.processError || "時間をおいて、履歴から再試行してください。" : "アプリを閉じても、要約は自動で保存されます。"), done && actionBtn("要約を見る", onOpen), failed && actionBtn("履歴で再試行", onShowHistory)), (done || failed) && /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    "aria-label": "案内を閉じる",
+    style: {
+      background: "none",
+      border: "none",
+      padding: 2,
+      cursor: "pointer"
+    }
+  }, /*#__PURE__*/React.createElement(Ic, {
+    n: "xmark",
+    size: 13,
+    color: C.text2
+  })));
+}
 function HomeScreen({ member, onShowHelp, onShowHistory }) {
   const [selectedRec, setSelectedRec] = useState(null);
   // 端末に保存した前回の履歴があれば、それをすぐ出しておく（裏で最新に差し替える）
@@ -1794,7 +1878,8 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
   const [submitting, setSubmitting] = useState(false);
   const [slowSending, setSlowSending] = useState(false);
   const [error, setError] = useState(null);
-  const [notice, setNotice] = useState(null);
+  // 直前に受け付けた記録。ホーム上部の案内を、その記録の進み具合（要約中→完了／失敗）に合わせて切り替える
+  const [noticeId, setNoticeId] = useState(null);
   const [pollTick, setPollTick] = useState(0);
   const pollCountRef = useRef(0);
   // 送信中・送信に失敗した内容の記録番号。内容を変えたら新しい番号にする
@@ -1864,6 +1949,7 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
     }, 5000);
     return () => clearTimeout(t);
   }, [pendingIds, pollTick]);
+  const noticeRec = noticeId ? recentRecs.find(r => r.id === noticeId) : null;
   const typedName = interviewee.trim();
   const candidates = nameCandidates.filter(n => n !== typedName && (!typedName || n.includes(typedName))).slice(0, 6);
   const trimmed = transcript.trim();
@@ -1878,7 +1964,7 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
         return;
       }
       setTranscript(text);
-      setNotice(null);
+      setNoticeId(null);
       setError(null);
     } catch {
       setError("貼り付けできませんでした。下の欄を長押しして「ペースト」を選んでください。");
@@ -1887,7 +1973,7 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
   const handleSubmit = async () => {
     if (!canSubmit) return;
     setError(null);
-    setNotice(null);
+    setNoticeId(null);
     setSubmitting(true);
     let accepted;
     // 同じ内容を送り直す間は同じ番号を使う（エラー後に押し直しても2件にならない）
@@ -1983,7 +2069,7 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
     setTranscript("");
     setInterviewee("");
     setSubmitting(false);
-    setNotice("受け付けました。アプリを閉じても要約は自動で保存されます。");
+    setNoticeId(accepted.id);
   };
   return /*#__PURE__*/React.createElement("div", {
     style: {
@@ -2046,28 +2132,12 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
       fontSize: 12,
       color: C.red
     }
-  }, error), notice && /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      alignItems: "flex-start",
-      gap: 7,
-      background: `${C.green}14`,
-      border: `1px solid ${C.green}35`,
-      borderRadius: 10,
-      padding: "9px 11px",
-      marginBottom: 10,
-      fontSize: 12,
-      lineHeight: 1.6,
-      color: C.text
-    }
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: "circle-check",
-    size: 14,
-    color: C.green,
-    style: {
-      marginTop: 2
-    }
-  }), /*#__PURE__*/React.createElement("span", null, notice)), canReadClipboard && !trimmed && /*#__PURE__*/React.createElement("button", {
+  }, error), noticeRec && /*#__PURE__*/React.createElement(SubmitProgress, {
+    rec: noticeRec,
+    onOpen: () => setSelectedRec(noticeRec),
+    onShowHistory: onShowHistory,
+    onClose: () => setNoticeId(null)
+  }), canReadClipboard && !trimmed && /*#__PURE__*/React.createElement("button", {
     onClick: pasteFromClipboard,
     disabled: submitting,
     style: {
@@ -2094,7 +2164,7 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
     value: transcript,
     onChange: e => {
       setTranscript(e.target.value);
-      setNotice(null);
+      setNoticeId(null);
     },
     placeholder: canReadClipboard ? "または、ここに直接貼り付け" : "ここに文字起こしを貼り付け",
     rows: trimmed ? 8 : 3,
