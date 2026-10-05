@@ -419,7 +419,7 @@ async function gasGet(p, timeoutMs = 30000) {
     r = await Promise.race([fetch(GAS_URL + "?" + new URLSearchParams(p)), new Promise((_, reject) => setTimeout(() => reject(timeoutError("通信がタイムアウトしました。ネットワーク状況を確認して再試行してください。")), timeoutMs))]);
   } catch (e) {
     if (e.isTimeout) throw e;
-    throw new Error("通信に失敗しました: " + e.message);
+    throw new Error("通信に失敗しました。電波の状況を確認して、もう一度お試しください（" + e.message + "）");
   }
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   let json;
@@ -443,7 +443,7 @@ async function gasPost(b, timeoutMs = 30000) {
     }), new Promise((_, reject) => setTimeout(() => reject(timeoutError("通信がタイムアウトしました。時間をおいて再試行してください。")), timeoutMs))]);
   } catch (e) {
     if (e.isTimeout) throw e;
-    throw new Error("通信に失敗しました。Service Workerまたはネットワークの問題の可能性があります: " + e.message);
+    throw new Error("通信に失敗しました。電波の状況を確認して、もう一度お試しください（" + e.message + "）");
   }
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   let json;
@@ -2041,7 +2041,8 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
       fontSize: 14
     }
   }, "まだ記録がありません")))), selectedRec && /*#__PURE__*/React.createElement(SummaryModal, {
-    item: selectedRec,
+    // 開いている間に処理が終わったら表示を切り替えられるよう、一覧の最新の状態を渡す
+    item: recentRecs.find(r => r.id === selectedRec.id) || selectedRec,
     onClose: () => setSelectedRec(null),
     onSaved: secs => {
       setSelectedRec(s => ({
@@ -2510,15 +2511,30 @@ function HistoryScreen({
   const doRetry = async item => {
     setRetryingIds(prev => new Set(prev).add(item.id));
     try {
-      await gasPost({
+      const res = await gasPost({
         action: "retryRecord",
         id: item.id
       });
+      if (!res.success) throw new Error(res.error || "GASエラー");
       setRecords(prev => prev.map(r => r.id === item.id ? {
         ...r,
         status: "queued",
         processError: ""
       } : r));
+      // ホームの「要約する」と同じく、定期実行を待たずにその場で要約を始めてもらう
+      // （届かなくても定期実行が拾う。結果は状態確認でも反映される）
+      gasPost({
+        action: "processRecord",
+        id: item.id
+      }, 90000).then(r => {
+        if (r && r.status === "done") {
+          setRecords(prev => prev.map(x => x.id === item.id ? {
+            ...x,
+            status: "done",
+            sections: normalizeSections(r.sections)
+          } : x));
+        }
+      }).catch(() => {});
     } catch (e) {
       setError("再試行の送信に失敗しました。通信を確認してもう一度お試しください。");
     }
@@ -2907,7 +2923,8 @@ function HistoryScreen({
       cursor: "pointer"
     }
   }, deleting ? "削除中..." : "削除する")))), selected && /*#__PURE__*/React.createElement(SummaryModal, {
-    item: selected,
+    // 開いている間に処理が終わったら表示を切り替えられるよう、一覧の最新の状態を渡す
+    item: records.find(r => r.id === selected.id) || selected,
     onClose: () => setSelected(null),
     onDelete: item => {
       setSelected(null);
