@@ -1183,7 +1183,6 @@ function SummaryModal({
   onSaved,
   onDelete
 }) {
-  const [collapsed, setCollapsed] = useState(new Set());
   const [editing, setEditing] = useState(false);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [draft, setDraft] = useState(null);
@@ -1212,11 +1211,6 @@ function SummaryModal({
   };
   const secs = item.sections?.sections || [];
   const analysis = item.sections?.analysis || null;
-  const toggleCollapse = key => setCollapsed(s => {
-    const n = new Set(s);
-    n.has(key) ? n.delete(key) : n.add(key);
-    return n;
-  });
   const startEdit = () => {
     setDraft(deepCopy(item.sections));
     setEditing(true);
@@ -1269,6 +1263,43 @@ function SummaryModal({
     setTimeout(() => setMsg(""), 2500);
   };
   const dispSecs = editing ? draft?.sections || [] : secs;
+  const kind = item.sections?.meetingType === "group" ? "会議" : item.sections?.meetingType === "1on1" ? "1on1" : "";
+  const copied = msg === "コピーしました";
+  // コピー・編集・キャンセルは同じ控えめな形にそろえ、保存だけを青にする
+  const quietBtn = {
+    flex: 1,
+    height: 40,
+    borderRadius: 10,
+    border: "none",
+    background: C.bg,
+    color: C.text,
+    fontSize: 14,
+    fontWeight: 600,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    cursor: "pointer"
+  };
+  const heading = first => ({
+    fontSize: 14,
+    fontWeight: 700,
+    color: C.text,
+    margin: first ? "4px 0 6px" : "20px 0 6px"
+  });
+  const divider = {
+    borderTop: `1px solid ${C.sep}`,
+    marginTop: 22
+  };
+  const metricRow = {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    fontSize: 13,
+    color: C.text2,
+    marginTop: 10
+  };
+  const pct = v => `${v}%`;
   return /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
@@ -1282,7 +1313,7 @@ function SummaryModal({
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       width: "100%",
-      maxHeight: "90%",
+      maxHeight: "92%",
       background: C.surface,
       borderRadius: "20px 20px 0 0",
       display: "flex",
@@ -1304,62 +1335,35 @@ function SummaryModal({
     }
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      padding: "12px 18px 12px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
       display: "flex",
-      alignItems: "center",
-      gap: 8,
-      padding: "12px 18px 10px"
+      alignItems: "flex-start",
+      gap: 10
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       flex: 1,
       minWidth: 0
     }
-  }, /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("p", {
     style: {
-      display: "flex",
-      alignItems: "center",
-      gap: 7,
-      marginBottom: 3
-    }
-  }, /*#__PURE__*/React.createElement(TypeBadge, {
-    type: item.sections?.meetingType
-  }), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 17,
+      fontSize: 19,
       fontWeight: 700,
-      color: item.interviewee ? C.text : C.text2,
+      color: C.text,
       overflow: "hidden",
       textOverflow: "ellipsis",
-      whiteSpace: "nowrap",
-      minWidth: 0
+      whiteSpace: "nowrap"
     }
-  }, item.interviewee || "相手未入力")), /*#__PURE__*/React.createElement("p", {
+  }, item.interviewee || (kind === "会議" ? "会議" : "面談")), /*#__PURE__*/React.createElement("p", {
     style: {
-      fontSize: 11,
-      color: C.text2
-    }
-  }, relDate(item.date))), secs.length > 0 && !editing && /*#__PURE__*/React.createElement("button", {
-    onClick: doCopy,
-    style: {
-      display: "flex",
-      alignItems: "center",
-      gap: 5,
-      height: 32,
-      padding: "0 12px",
-      borderRadius: 16,
-      background: `${C.green}14`,
-      color: C.green,
       fontSize: 13,
-      fontWeight: 600,
-      border: "none",
-      cursor: "pointer",
-      flexShrink: 0
+      color: C.text2,
+      marginTop: 2
     }
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: msg === "コピーしました" ? "check" : "clipboard",
-    size: 13,
-    color: C.green
-  }), msg === "コピーしました" ? "コピー済み" : "コピー"), /*#__PURE__*/React.createElement("button", {
+  }, [kind, relDate(item.date)].filter(Boolean).join(" · "))), /*#__PURE__*/React.createElement("button", {
     "aria-label": "要約を閉じる",
     onClick: onClose,
     style: {
@@ -1378,133 +1382,66 @@ function SummaryModal({
     n: "xmark",
     size: 14,
     color: C.text2
-  }))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      overflowY: "auto",
-      padding: "0 18px calc(40px + env(safe-area-inset-bottom))",
-      flex: 1
-    }
-  }, /*#__PURE__*/React.createElement("div", {
+  }))), secs.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
-      marginBottom: 8
+      gap: 8,
+      marginTop: 14
     }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 13,
-      fontWeight: 600,
-      color: C.text2
-    }
-  }, "AI 要約"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      alignItems: "center",
-      gap: 8
-    }
-  }, msg && /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 11,
-      color: msg.includes("失敗") ? C.red : C.green
-    }
-  }, msg !== "コピーしました" && msg), item.id && secs.length > 0 && !editing && /*#__PURE__*/React.createElement("button", {
-    onClick: startEdit,
-    style: {
-      display: "flex",
-      alignItems: "center",
-      gap: 5,
-      fontSize: 12,
-      color: C.blue,
-      background: `${C.blue}12`,
-      borderRadius: 8,
-      padding: "5px 10px",
-      border: "none",
-      cursor: "pointer"
-    }
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: "pen",
-    size: 11,
-    color: C.blue
-  }), "編集"), editing && /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      gap: 6
-    }
-  }, /*#__PURE__*/React.createElement("button", {
+  }, editing ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
     onClick: cancelEdit,
-    style: {
-      fontSize: 12,
-      color: C.text2,
-      background: C.bg,
-      borderRadius: 8,
-      padding: "5px 10px",
-      border: "none",
-      cursor: "pointer"
-    }
+    disabled: saving,
+    style: quietBtn
   }, "キャンセル"), /*#__PURE__*/React.createElement("button", {
     onClick: saveEdit,
     disabled: saving,
     style: {
-      fontSize: 12,
-      fontWeight: 600,
-      color: "#fff",
+      ...quietBtn,
       background: saving ? `${C.blue}80` : C.blue,
-      borderRadius: 8,
-      padding: "5px 12px",
-      border: "none",
-      cursor: "pointer"
+      color: "#fff"
     }
-  }, saving ? "保存中..." : "保存")))), !editing && secs.length === 0 && /*#__PURE__*/React.createElement("p", {
+  }, saving ? "保存中..." : "保存")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+    onClick: doCopy,
+    style: quietBtn
+  }, /*#__PURE__*/React.createElement(Ic, {
+    n: copied ? "check" : "clipboard",
+    size: 13,
+    color: copied ? C.green : C.text
+  }), copied ? "コピーしました" : "コピー"), item.id && /*#__PURE__*/React.createElement("button", {
+    onClick: startEdit,
+    style: quietBtn
+  }, /*#__PURE__*/React.createElement(Ic, {
+    n: "pen",
+    size: 12,
+    color: C.text
+  }), "編集"))), msg && !copied && /*#__PURE__*/React.createElement("p", {
     style: {
-      fontSize: 13,
+      fontSize: 12,
+      marginTop: 8,
+      color: msg.includes("失敗") ? C.red : C.green
+    }
+  }, msg)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      overflowY: "auto",
+      padding: "4px 18px calc(32px + env(safe-area-inset-bottom))",
+      flex: 1,
+      borderTop: `1px solid ${C.sep}`
+    }
+  }, !editing && secs.length === 0 && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 14,
       lineHeight: 1.7,
       color: item.status === "error" ? C.red : C.text2,
-      background: C.bg,
-      borderRadius: 10,
-      padding: "12px 14px",
-      marginBottom: 8
+      padding: "16px 0"
     }
-  }, item.status === "error" ? "処理に失敗しました（履歴の再試行ボタンでやり直せます）: " + (item.processError || "不明なエラー") : "AI処理中です。完了すると要約が表示されます。"), dispSecs.map((sec, si) => /*#__PURE__*/React.createElement("div", {
-    key: sec.key,
+  }, item.status === "error" ? "要約できませんでした。履歴の［再試行］でやり直せます。" + (item.processError ? "（" + item.processError + "）" : "") : "要約しています…"), dispSecs.map((sec, si) => /*#__PURE__*/React.createElement("div", {
+    key: sec.key || si,
     style: {
-      borderRadius: 10,
-      overflow: "hidden",
-      border: `1px solid ${C.sep}`,
-      marginBottom: 8
+      paddingTop: si === 0 ? 14 : 0
     }
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => !editing && toggleCollapse(sec.key),
-    style: {
-      width: "100%",
-      padding: "8px 12px",
-      background: C.bg,
-      display: "flex",
-      alignItems: "center",
-      gap: 6,
-      border: "none",
-      cursor: editing ? "default" : "pointer",
-      textAlign: "left"
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 13,
-      fontWeight: 600,
-      color: C.text
-    }
-  }, sec.label), !editing && /*#__PURE__*/React.createElement(Ic, {
-    n: collapsed.has(sec.key) ? "chevron-down" : "chevron-up",
-    size: 12,
-    color: C.text2,
-    style: {
-      marginLeft: "auto"
-    }
-  })), !collapsed.has(sec.key) && /*#__PURE__*/React.createElement("div", {
-    style: {
-      padding: "8px 12px 10px",
-      background: C.surface
-    }
-  }, (sec.items || []).map((it, ii) => editing ? /*#__PURE__*/React.createElement("textarea", {
+  }, /*#__PURE__*/React.createElement("p", {
+    style: heading(si === 0)
+  }, sec.label), (sec.items || []).map((it, ii) => editing ? /*#__PURE__*/React.createElement("textarea", {
     key: ii,
     value: it,
     onChange: e => {
@@ -1518,20 +1455,21 @@ function SummaryModal({
         })
       }));
     },
-    rows: Math.max(1, Math.ceil(it.length / 36)),
+    rows: Math.max(1, Math.ceil(it.length / 22)),
     style: {
       width: "100%",
       background: C.bg,
       border: `1px solid ${C.sep}`,
-      borderRadius: 7,
-      padding: "7px 9px",
-      fontSize: 13,
+      borderRadius: 8,
+      padding: "8px 10px",
+      // iOS Safariは16px未満の入力欄にフォーカスすると画面を拡大してしまうため16pxにする
+      fontSize: 16,
       color: C.text,
-      lineHeight: 1.65,
+      lineHeight: 1.6,
       resize: "none",
       fontFamily: "inherit",
       outline: "none",
-      marginBottom: ii < sec.items.length - 1 ? 6 : 0,
+      marginBottom: 6,
       WebkitUserSelect: "text",
       userSelect: "text"
     }
@@ -1540,149 +1478,173 @@ function SummaryModal({
     style: {
       display: "flex",
       alignItems: "flex-start",
-      gap: 7,
+      gap: 9,
       padding: "3px 0",
-      fontSize: 13,
+      fontSize: 15,
       color: C.text,
-      lineHeight: 1.65,
+      lineHeight: 1.7,
       // 長押しで一部だけ選んでコピーできるようにする（画面全体は選択できない設定のため）
       WebkitUserSelect: "text",
       userSelect: "text"
     }
-  }, /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("span", {
     style: {
-      width: 5,
-      height: 5,
+      width: 4,
+      height: 4,
       borderRadius: "50%",
-      background: C.purple,
-      marginTop: 6,
+      background: C.text2,
+      marginTop: 11,
       flexShrink: 0
     }
-  }), /*#__PURE__*/React.createElement("span", null, it)))))), analysis && /*#__PURE__*/React.createElement("div", {
-    style: {
-      borderRadius: 12,
-      border: `1px solid ${C.sep}`,
-      background: C.bg,
-      padding: "12px 14px",
-      margin: "14px 0 12px"
-    }
+  }), /*#__PURE__*/React.createElement("span", null, it))))), analysis && !editing && /*#__PURE__*/React.createElement("div", {
+    style: divider
   }, /*#__PURE__*/React.createElement("p", {
-    style: { fontSize: 12, fontWeight: 600, color: C.text2, marginBottom: 10 }
-  }, "\ud83d\udcca \u9762\u8ac7\u5206\u6790"),
-  // \u767a\u8a71\u5272\u5408\u30d0\u30fc
-  analysis.speakingRatio && /*#__PURE__*/React.createElement("div", { style: { marginBottom: 10 } },
-    /*#__PURE__*/React.createElement("div", {
-      style: { display: "flex", justifyContent: "space-between", fontSize: 11, color: C.text2, marginBottom: 4 }
-    },
-      /*#__PURE__*/React.createElement("span", null, `\u3042\u306a\u305f ${analysis.speakingRatio.self}%`),
-      /*#__PURE__*/React.createElement("span", null, `\u76f8\u624b ${analysis.speakingRatio.other}%`)
-    ),
-    /*#__PURE__*/React.createElement("div", {
-      style: { display: "flex", height: 8, borderRadius: 4, overflow: "hidden", background: C.sep }
-    },
-      /*#__PURE__*/React.createElement("div", { style: { width: `${analysis.speakingRatio.self}%`, background: C.blue } }),
-      /*#__PURE__*/React.createElement("div", { style: { width: `${analysis.speakingRatio.other}%`, background: C.purple } })
-    )
-  ),
-  // \u50be\u8074\u5ea6\u30b9\u30b3\u30a2
-  typeof analysis.listeningScore === "number" && /*#__PURE__*/React.createElement("div", {
-    style: { display: "flex", alignItems: "center", gap: 10, marginBottom: analysis.listeningComment ? 4 : 0 }
-  },
-    /*#__PURE__*/React.createElement("span", { style: { fontSize: 11, color: C.text2, flexShrink: 0 } }, "\u50be\u8074\u5ea6"),
-    /*#__PURE__*/React.createElement("div", {
-      style: { flex: 1, height: 6, borderRadius: 3, background: C.sep, overflow: "hidden" }
-    },
-      /*#__PURE__*/React.createElement("div", {
-        style: {
-          width: `${analysis.listeningScore}%`, height: "100%",
-          background: analysis.listeningScore >= 70 ? C.green : analysis.listeningScore >= 40 ? C.orange : C.red
-        }
-      })
-    ),
-    /*#__PURE__*/React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: C.text, flexShrink: 0 } }, `${analysis.listeningScore}`)
-  ),
-  analysis.listeningComment && /*#__PURE__*/React.createElement("p", {
-    style: { fontSize: 11, color: C.text2, marginTop: 2 }
-  }, analysis.listeningComment),
-  typeof analysis.openQuestionRatio === "number" && /*#__PURE__*/React.createElement("p", {
-    style: { fontSize: 11, color: C.text2, marginTop: 8 }
-  }, `\ud83d\udca1 \u30aa\u30fc\u30d7\u30f3\u8cea\u554f\u5272\u5408: ${analysis.openQuestionRatio}%`)
-  ), hasTranscript && /*#__PURE__*/React.createElement("div", {
+    style: heading(false)
+  }, "面談分析"), analysis.speakingRatio && /*#__PURE__*/React.createElement("div", {
     style: {
-      borderRadius: 10,
-      overflow: "hidden",
-      border: `1px solid ${C.sep}`,
-      marginBottom: 10
+      marginTop: 6
     }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      fontSize: 13,
+      color: C.text2,
+      marginBottom: 5
+    }
+  }, /*#__PURE__*/React.createElement("span", null, "あなた ", pct(analysis.speakingRatio.self)), /*#__PURE__*/React.createElement("span", null, "相手 ", pct(analysis.speakingRatio.other))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      height: 6,
+      borderRadius: 3,
+      overflow: "hidden",
+      background: C.sep
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: pct(analysis.speakingRatio.self),
+      background: C.blue
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: pct(analysis.speakingRatio.other),
+      background: `${C.blue}55`
+    }
+  }))), typeof analysis.listeningScore === "number" && /*#__PURE__*/React.createElement("div", {
+    style: metricRow
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      flexShrink: 0,
+      width: 84
+    }
+  }, "傾聴度"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      height: 6,
+      borderRadius: 3,
+      background: C.sep,
+      overflow: "hidden"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: pct(analysis.listeningScore),
+      height: "100%",
+      background: analysis.listeningScore >= 70 ? C.green : analysis.listeningScore >= 40 ? C.orange : C.red
+    }
+  })), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700,
+      color: C.text,
+      width: 34,
+      textAlign: "right"
+    }
+  }, analysis.listeningScore)), typeof analysis.openQuestionRatio === "number" && /*#__PURE__*/React.createElement("div", {
+    style: metricRow
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      flexShrink: 0,
+      width: 84
+    }
+  }, "オープン質問"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      height: 6,
+      borderRadius: 3,
+      background: C.sep,
+      overflow: "hidden"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: pct(analysis.openQuestionRatio),
+      height: "100%",
+      background: C.blue
+    }
+  })), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700,
+      color: C.text,
+      width: 34,
+      textAlign: "right"
+    }
+  }, pct(analysis.openQuestionRatio))), analysis.listeningComment && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 13,
+      color: C.text2,
+      lineHeight: 1.6,
+      marginTop: 10
+    }
+  }, analysis.listeningComment)), hasTranscript && !editing && /*#__PURE__*/React.createElement("div", {
+    style: divider
   }, /*#__PURE__*/React.createElement("button", {
     onClick: toggleTranscript,
+    "aria-expanded": transcriptOpen,
     style: {
       width: "100%",
-      padding: "8px 12px",
-      background: C.bg,
+      padding: "14px 0 4px",
+      background: "none",
       display: "flex",
       alignItems: "center",
       justifyContent: "space-between",
       border: "none",
       cursor: "pointer"
     }
-  }, /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("span", {
     style: {
-      display: "flex",
-      alignItems: "center",
-      gap: 6
-    }
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: "file-lines",
-    size: 13,
-    color: C.blue
-  }), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 13,
-      fontWeight: 600,
+      fontSize: 14,
+      fontWeight: 700,
       color: C.text
     }
-  }, "文字起こし（元のテキスト）")), /*#__PURE__*/React.createElement(Ic, {
+  }, "文字起こし"), /*#__PURE__*/React.createElement(Ic, {
     n: transcriptOpen ? "chevron-up" : "chevron-down",
     size: 12,
     color: C.text2
-  })), transcriptOpen && /*#__PURE__*/React.createElement("div", {
+  })), transcriptOpen && /*#__PURE__*/React.createElement("p", {
     style: {
-      padding: "8px 12px 10px",
-      background: C.surface
-    }
-  }, /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 13,
+      fontSize: 14,
       color: transcriptState === "error" ? C.red : C.text2,
-      lineHeight: 1.75,
-      margin: 0,
+      lineHeight: 1.8,
+      marginTop: 8,
       whiteSpace: "pre-wrap",
       WebkitUserSelect: "text",
       userSelect: "text"
     }
-  }, transcript || (transcriptState === "error" ? "読み込めませんでした。閉じてもう一度開いてください。" : "読み込み中...")))), onDelete && !editing && /*#__PURE__*/React.createElement("button", {
+  }, transcript || (transcriptState === "error" ? "読み込めませんでした。閉じてもう一度開いてください。" : "読み込み中..."))), onDelete && !editing && /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...divider,
+      textAlign: "center",
+      paddingTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("button", {
     onClick: () => onDelete(item),
     style: {
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      gap: 6,
-      width: "100%",
-      marginTop: 18,
-      padding: "11px",
       background: "none",
-      border: `1px solid ${C.red}30`,
-      borderRadius: 12,
-      fontSize: 13,
+      border: "none",
+      fontSize: 14,
       color: C.red,
-      cursor: "pointer"
+      cursor: "pointer",
+      padding: "6px 12px"
     }
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: "trash",
-    size: 13,
-    color: C.red
-  }), "この記録を削除"))));
+  }, "この記録を削除")))));
 }
 
 // ── HOME SCREEN ───────────────────────────────────────────
@@ -1692,7 +1654,6 @@ function SummaryModal({
 // スプレッドシートの1セルの上限（5万文字）に収めるための上限。
 const MAX_TRANSCRIPT_CHARS = 30000;
 const HOME_RECENT_COUNT = 3;
-// 過去に入力された相手の名前を、新しい順・重複なしで並べる（入力候補として出す）
 // 処理待ち・処理中の記録があれば5秒おきに状況を確認し、終わったものから表示を切り替える
 // （ホームと履歴で共通）。複数あっても1回の通信でまとめて確認し、状態が変わらなければ
 // 画面を描き直さない。新しい記録が加わったら回数を数え直し、GAS側で固まった場合に
@@ -1749,6 +1710,7 @@ function useStatusPolling(list, setList) {
     return () => clearTimeout(t);
   }, [pendingIds, tick]);
 }
+// 過去に入力された相手の名前を、新しい順・重複なしで並べる（入力候補として出す）
 function uniqueNames(names) {
   const seen = new Set();
   const out = [];
@@ -2342,7 +2304,7 @@ const HELP_STEPS = [{
   body: "ホーム画面の「タップして貼り付け」を押し、相手・参加者を入れて（欄を押すと以前の名前が候補に出ます）「要約する」を押します。「受け付けました」と出たら、アプリを閉じても大丈夫です。開いたままなら、要約が終わると「要約ができました」と表示され、［要約を見る］から確認できます（通常は数秒〜十数秒。混み合っている時はもう少しかかります）。"
 }, {
   title: "見返す",
-  body: "要約は「履歴」に保存されます。1on1／会議の切り替えや、キーワード・相手の名前で探せます。要約画面の右上「コピー」で他のアプリに貼り付けられ、「編集」で内容を直せます。削除は要約画面のいちばん下からできます。"
+  body: "要約は「履歴」に保存されます。1on1／会議の切り替えや、キーワード・相手の名前で探せます。要約画面の［コピー］で他のアプリに貼り付けられ、［編集］で内容を直せます。削除は要約画面のいちばん下からできます。"
 }];
 const HELP_SUMMARY_TYPES = [{
   type: "1on1",
@@ -2367,7 +2329,7 @@ const HELP_FAQ = [{
   a: "ボイスメモで録音を開き、「文字起こしを表示」してから「文字起こしをコピー」をしてください。それでも入らない場合は、表示される欄を長押しして「ペースト」を選んでください。"
 }, {
   q: "「AI処理中」のまま終わらない",
-  a: "混み合っていると数分かかることがあります。終わり次第、ホーム画面と履歴に自動で反映されます。10分以上たっても変わらない場合は、履歴画面右上の更新ボタンを押してください。"
+  a: "混み合っていると数分かかることがあります。終わり次第、ホーム画面と履歴に自動で反映されます。10分以上たっても変わらない場合は、履歴画面を開き直してください。"
 }, {
   q: "「処理に失敗しました」と出た",
   a: "履歴の該当する記録にある「再試行」を押してください。失敗の多くは一時的な混雑によるもので、少し時間を置けばほとんどの場合うまくいきます。"
