@@ -1891,8 +1891,26 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
     let accepted;
     // 同じ内容を送り直す間は同じ番号を使う（エラー後に押し直しても2件にならない）
     if (!submitIdRef.current) submitIdRef.current = newRecordId();
+    const recId = submitIdRef.current;
+    // 要約開始は、受け付けの返事を待たずに同時に送る（Google側の待ち時間を1回分減らす）。
+    // 先に着いた場合、GASは受け付けの保存を少し待ってから要約する。応答が届かなくても、
+    // 受け付け済みの記録は1分おきの定期実行が要約する。開いたままなら結果を反映する。
+    let summarized = null;
+    gasPost({
+      action: "processRecord",
+      id: recId
+    }, 120000).then(res => {
+      if (res && res.status === "done") {
+        summarized = normalizeSections(res.sections);
+        setRecentRecs(prev => prev.map(r => r.id === recId ? {
+          ...r,
+          status: "done",
+          sections: summarized
+        } : r));
+      }
+    }).catch(() => {});
     try {
-      // まず文字起こしを保存（受け付け）だけして、すぐ利用者に返す。ここで
+      // 文字起こしを保存（受け付け）できたら、すぐ利用者に返す。ここで
       // 保存された記録は、この後アプリを閉じても必ず要約まで進む。
       accepted = await gasPost({
         action: "submitTranscript",
@@ -1911,35 +1929,22 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
       setSubmitting(false);
       return;
     }
-    const id = accepted.id;
+    // 要約が受け付けより先に終わっていれば、最初から要約を出す。まだなら「AI処理中」に
+    // して状況確認に任せる（送り直しで既に完了済みだった場合も、状況確認が要約を取ってくる）
     setRecentRecs(prev => [{
-      id,
+      id: accepted.id,
       date: new Date().toString(),
       member,
       interviewee: typedName,
-      status: "queued",
-      sections: null,
+      status: summarized ? "done" : "processing",
+      sections: summarized,
       hasTranscript: true
-    }, ...prev].slice(0, HOME_RECENT_COUNT));
+    }, ...prev.filter(r => r.id !== accepted.id)].slice(0, HOME_RECENT_COUNT));
     if (typedName) setNameCandidates(prev => uniqueNames([typedName, ...prev]));
     setTranscript("");
     setInterviewee("");
     setSubmitting(false);
     setNotice("受け付けました。アプリを閉じても要約は自動で保存されます。");
-    // 続けて要約を今すぐ始めてもらう。応答は待たなくてよい（届かなかった場合も、
-    // 受け付け済みの記録は1分おきの定期実行が要約する）。開いたままなら結果を反映する。
-    gasPost({
-      action: "processRecord",
-      id
-    }, 90000).then(res => {
-      if (res && res.status === "done") {
-        setRecentRecs(prev => prev.map(r => r.id === id ? {
-          ...r,
-          status: "done",
-          sections: normalizeSections(res.sections)
-        } : r));
-      }
-    }).catch(() => {});
   };
   return /*#__PURE__*/React.createElement("div", {
     style: {

@@ -247,10 +247,14 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 // 定期実行が処理している最中の記録を別の定期実行がもう一度拾って二重に要約し、
 // 先に完了した要約を後から「失敗」で上書きしてしまうことがあった。
 
-// その場での要約（アプリが受け付け直後に呼ぶ）。アプリの待ち上限90秒に収める。
-// 利用回数の上限（429）で10秒より長く待つよう言われたら、その場ではあきらめて
-// 定期実行に任せる（待つ間もGeminiの呼び出しを重ねると、上限にかかり続けるため）。
-const RETRY_POLICY_SYNC = { maxAttempts: 3, budgetMs: 60 * 1000, max429WaitSec: 10, serverErrorWaitSec: () => 2 };
+// その場での要約（アプリが受け付けと同時に呼ぶ）。利用回数の上限（429）に当たっても、
+// Geminiが指示する時間（60秒まで）ならその場で待つ。定期実行に回すと拾われるまで
+// 最大1分余計にかかるため。アプリが待ちきれずに通信を切っても、GAS側の処理は最後まで
+// 続き、結果はアプリの状況確認で表示される。
+const RETRY_POLICY_SYNC = { maxAttempts: 4, budgetMs: 100 * 1000, max429WaitSec: 60, serverErrorWaitSec: () => 2 };
+// 受け付け（submitTranscript）と要約開始（processRecord）はアプリから同時に送られて
+// くるので、要約開始が先に着いた場合は、受け付けの保存をこの時間まで待つ
+const WAIT_FOR_SUBMIT_MS = 20 * 1000;
 // 定期実行での要約。GASの実行時間上限（6分）に収まるよう、1件あたり最大4分。
 const RETRY_POLICY_BACKGROUND = { maxAttempts: 6, budgetMs: 4 * 60 * 1000, max429WaitSec: 60, serverErrorWaitSec: attempt => Math.min(attempt * 5, 20) };
 // 1回の定期実行で新しい記録を拾い始めるのは、開始からこの時間まで
@@ -260,7 +264,12 @@ function processRecord(body) {
   const id = body.id ? String(body.id) : "";
   if (!id) return { success: false, error: "id required" };
   const auth = getGeminiAuth();
-  const job = claimQueuedRow_(id);
+  let job = claimQueuedRow_(id);
+  const waitUntil = Date.now() + WAIT_FOR_SUBMIT_MS;
+  while (!job && Date.now() < waitUntil && findRecordRowById(recordsSheet(), id) < 0) {
+    Utilities.sleep(1000);
+    job = claimQueuedRow_(id);
+  }
   if (!job) return { success: true, id, status: "skipped" };
   if (!job.transcript) {
     finishJob_(job, { error: "文字起こしテキストがありません" });
@@ -344,6 +353,7 @@ function claimQueuedRow_(id) {
       token: toMillis_(startedCell.getValue())
     };
   } finally {
+    SpreadsheetApp.flush(); // ロックを放す前に書き込みを確定させ、他の処理から見えるようにする
     lock.releaseLock();
   }
 }
@@ -414,6 +424,7 @@ function withShortLock(fn) {
   try {
     return fn();
   } finally {
+    SpreadsheetApp.flush(); // 書き込みを確定させてから放す（同時に動く処理がすぐ読めるように）
     if (gotLock) lock.releaseLock();
   }
 }
@@ -535,15 +546,26 @@ function callGeminiSummarize(transcript, auth, policy) {
     generationConfig: config
   });
 
+  // 高速化の設定を受け付けないモデルは覚えておき、次からは最初から従来の設定で呼ぶ
+  // （毎回、断られる呼び出しを1回はさむと、その分だけ遅くなるため）
+  const props = PropertiesService.getScriptProperties();
+  const noFastKey = "NO_FAST_CONFIG_" + geminiModel();
   let jsonText;
-  try {
-    const resText = fetchGeminiWithRetry(url, buildPayload(Object.assign({}, baseConfig, SUMMARIZE_FAST_CONFIG)), "要約", auth, policy);
-    jsonText = extractGeminiText(resText, "要約");
-  } catch (e) {
-    if (e.message.indexOf("APIエラー 400") === -1) throw e;
-    console.warn("[要約] 高速化の設定が受け付けられなかったため、従来の設定でやり直します:", e.message);
-    const resText = fetchGeminiWithRetry(url, buildPayload(baseConfig), "要約", auth, policy);
-    jsonText = extractGeminiText(resText, "要約");
+  if (props.getProperty(noFastKey)) {
+    jsonText = extractGeminiText(fetchGeminiWithRetry(url, buildPayload(baseConfig), "要約", auth, policy), "要約");
+  } else {
+    try {
+      const resText = fetchGeminiWithRetry(url, buildPayload(Object.assign({}, baseConfig, SUMMARIZE_FAST_CONFIG)), "要約", auth, policy);
+      jsonText = extractGeminiText(resText, "要約");
+    } catch (e) {
+      if (e.message.indexOf("APIエラー 400") === -1) throw e;
+      console.warn("[要約] 高速化の設定が受け付けられなかったため、従来の設定でやり直します:", e.message);
+      const resText = fetchGeminiWithRetry(url, buildPayload(baseConfig), "要約", auth, policy);
+      jsonText = extractGeminiText(resText, "要約");
+      // 従来の設定なら通った＝原因は高速化の設定なので、このモデルでは次から使わない
+      props.setProperty(noFastKey, "1");
+      console.log("[要約] " + geminiModel() + " では次から高速化の設定を使いません");
+    }
   }
 
   // Geminiがmarkdownコードブロックで返す場合に対応
