@@ -2345,7 +2345,7 @@ if('serviceWorker'in navigator&&!location.hostname.includes('claudeusercontent')
     navigator.serviceWorker.register('./sw.js').then(r=>r.update()).catch(()=>{});
     let reloaded = false;
     navigator.serviceWorker.addEventListener('controllerchange',()=>{
-      if (reloaded || window.__vmIsRecording) return;
+      if (reloaded) return;
       reloaded = true;
       window.location.reload();
     });
