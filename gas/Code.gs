@@ -204,11 +204,21 @@ function submitTranscript(body) {
     return { success: false, error: "文字数が上限（" + MAX_TRANSCRIPT_CHARS + "文字）を超えています" };
   }
 
+  // 記録の番号はアプリが送ってくる（送り直しても同じ番号）。保存した後に応答だけが
+  // 届かずアプリが自動で送り直した場合に、同じ記録を2件作らないため。
+  // 番号が付いていない・形が正しくない場合はこちらで作る。
+  const clientId = String(body.id || "");
+  const newId    = UUID_PATTERN.test(clientId) ? clientId.toLowerCase() : Utilities.getUuid();
   const sheet      = recordsSheet();
   const recordDate = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
-  const newId      = Utilities.getUuid();
 
-  withShortLock(() => {
+  return withShortLock(() => {
+    const existing = findRecordRowById(sheet, newId);
+    if (existing >= 0) {
+      const status = String(sheet.getRange(existing, COL.STATUS).getValue() || "");
+      console.log("[submitTranscript] 受け付け済みの送り直しのため、新しく作らない id:", newId);
+      return { success: true, id: newId, status, duplicate: true };
+    }
     sheet.appendRow([
       newId,        // COL.ID
       recordDate,   // COL.DATE
@@ -220,11 +230,12 @@ function submitTranscript(body) {
       "",           // COL.PROCESS_ERROR
       ""            // COL.PROCESSING_STARTED_AT
     ]);
+    console.log("[submitTranscript] 受け付け完了 id:", newId);
+    return { success: true, id: newId, status: "queued" };
   });
-  console.log("[submitTranscript] 受け付け完了 id:", newId);
-
-  return { success: true, id: newId, status: "queued" };
 }
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // ================================================================
 // 要約の処理の流れ（その場での要約と、1分おきの定期実行）

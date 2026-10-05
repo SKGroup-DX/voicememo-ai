@@ -417,7 +417,38 @@ function timeoutError(msg) {
 // 「待つのをあきらめる」方式にする（fetchはバックグラウンドで走り続けるが無害）。
 // 呼び出しはすべてPOSTで、本文に合言葉（key）を入れる（URLに載せないため）。
 // 合言葉が違うと言われたら、保存していた合言葉を消してログイン画面に戻す。
+// GASを新しいバージョンにデプロイした直後などに、Google側が一時的に404や5xxを返したり、
+// 通信が切れたりすることがある。その場合は数秒おいて自動でやり直す（最大2回）。
+// どの操作も何度送っても結果が変わらないようにしてある（受け付けは記録の番号を
+// アプリ側で先に決めて送るので、送り直しても2件にならない）。
+// タイムアウトはGAS側でまだ処理が続いている可能性があるため、やり直さない。
+const GAS_RETRY_WAITS_MS = [2000, 4000];
+const GAS_RETRYABLE_STATUS = [404, 408, 429, 500, 502, 503, 504];
 async function gasPost(b, timeoutMs = 30000) {
+  for (let attempt = 0;; attempt++) {
+    try {
+      return await gasPostOnce(b, timeoutMs);
+    } catch (e) {
+      if (!e.retryable || attempt >= GAS_RETRY_WAITS_MS.length) throw e;
+      await new Promise(r => setTimeout(r, GAS_RETRY_WAITS_MS[attempt]));
+    }
+  }
+}
+function retryableError(msg) {
+  const e = new Error(msg);
+  e.retryable = true;
+  return e;
+}
+// 記録の番号（UUID）。古いiPhoneで crypto.randomUUID が無い場合も作れるようにする
+function newRecordId() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  b[6] = b[6] & 0x0f | 0x40;
+  b[8] = b[8] & 0x3f | 0x80;
+  const h = [...b].map(x => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+async function gasPostOnce(b, timeoutMs) {
   let r;
   try {
     r = await Promise.race([fetch(GAS_URL, {
@@ -432,14 +463,18 @@ async function gasPost(b, timeoutMs = 30000) {
     }), new Promise((_, reject) => setTimeout(() => reject(timeoutError("通信がタイムアウトしました。時間をおいて再試行してください。")), timeoutMs))]);
   } catch (e) {
     if (e.isTimeout) throw e;
-    throw new Error("通信に失敗しました。電波の状況を確認して、もう一度お試しください（" + e.message + "）");
+    throw retryableError("通信に失敗しました。電波の状況を確認して、もう一度お試しください（" + e.message + "）");
   }
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  if (!r.ok) {
+    const msg = `サーバーが一時的に応答できませんでした（HTTP ${r.status}）。少し時間をおいてもう一度お試しください。`;
+    throw GAS_RETRYABLE_STATUS.includes(r.status) ? retryableError(msg) : new Error(msg);
+  }
   let json;
   try {
     json = await r.json();
   } catch (e) {
-    throw new Error("サーバーからの応答が不正でした（JSON解析失敗）");
+    // Google側のエラー画面（HTML）が返ってきた場合もここに来る
+    throw retryableError("サーバーからの応答が不正でした（JSON解析失敗）");
   }
   if (json == null || typeof json !== "object") {
     throw new Error("サーバーからの応答が空でした");
@@ -1761,6 +1796,11 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
   const [notice, setNotice] = useState(null);
   const [pollTick, setPollTick] = useState(0);
   const pollCountRef = useRef(0);
+  // 送信中・送信に失敗した内容の記録番号。内容を変えたら新しい番号にする
+  const submitIdRef = useRef(null);
+  useEffect(() => {
+    submitIdRef.current = null;
+  }, [transcript, interviewee]);
   // 最近の記録と相手の入力候補を、1回の履歴取得からまとめて作る
   const fetchRecent = useCallback(() => {
     if (!member) return;
@@ -1849,11 +1889,14 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
     setNotice(null);
     setSubmitting(true);
     let accepted;
+    // 同じ内容を送り直す間は同じ番号を使う（エラー後に押し直しても2件にならない）
+    if (!submitIdRef.current) submitIdRef.current = newRecordId();
     try {
       // まず文字起こしを保存（受け付け）だけして、すぐ利用者に返す。ここで
       // 保存された記録は、この後アプリを閉じても必ず要約まで進む。
       accepted = await gasPost({
         action: "submitTranscript",
+        id: submitIdRef.current,
         member,
         interviewee: typedName,
         transcript: trimmed
@@ -1862,7 +1905,7 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
     } catch (e) {
       let msg = e.message || "不明なエラー";
       if (msg.includes("Failed to fetch") || msg.includes("NetworkError") || msg.includes("Load failed")) {
-        msg = "通信が切断されました。履歴に保存されていない場合は、もう一度お試しください。";
+        msg = "通信が切断されました。電波の良いところで、もう一度「要約する」を押してください（押し直しても2件にはなりません）。";
       }
       setError("送信できませんでした: " + msg);
       setSubmitting(false);
