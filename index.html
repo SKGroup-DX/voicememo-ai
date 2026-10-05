@@ -1573,6 +1573,7 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
   const [interviewee, setInterviewee] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
   const [pollTick, setPollTick] = useState(0);
   const pollCountRef = useRef(0);
   // 最近の記録と相手の入力候補を、1回の履歴取得からまとめて作る
@@ -1639,6 +1640,7 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
         return;
       }
       setTranscript(text);
+      setNotice(null);
       setError(null);
     } catch {
       setError("貼り付けできませんでした。下の欄を長押しして「ペースト」を選んでください。");
@@ -1647,40 +1649,60 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
   const handleSubmit = async () => {
     if (!canSubmit) return;
     setError(null);
+    setNotice(null);
     setSubmitting(true);
+    let accepted;
     try {
-      // GAS側はその場で要約を試み、無料枠の混雑などで間に合わなかった場合だけ
-      // "queued"を返して定期実行に回す（その場合は状態確認で完了を待つ）。
-      // GAS側はGeminiの混雑時に最大3回まで再試行するため、待ち上限は90秒にしている
-      const data = await gasPost({
-        action: "summarizeText",
+      // まず文字起こしを保存（受け付け）だけして、すぐ利用者に返す。ここで
+      // 保存された記録は、この後アプリを閉じても必ず要約まで進む。
+      accepted = await gasPost({
+        action: "submitTranscript",
         member,
         interviewee: typedName,
-        transcript: trimmed
-      }, 90000);
-      if (!data.success) throw new Error(data.error || "GASエラー");
-      const rec = {
-        id: data.id,
-        date: new Date().toString(),
+        transcript: trimmed,
+        mode: "auto",
         duration: "",
-        member,
-        interviewee: typedName,
-        status: data.status,
-        sections: data.status === "done" ? normalizeSections(data.sections) : null
-      };
-      setRecentRecs(prev => [rec, ...prev].slice(0, HOME_RECENT_COUNT));
-      if (typedName) setNameCandidates(prev => uniqueNames([typedName, ...prev]));
-      if (data.status === "done") setSelectedRec(rec);
-      setTranscript("");
-      setInterviewee("");
+        mimeType: "text/plain"
+      }, 30000);
+      if (!accepted.success) throw new Error(accepted.error || "GASエラー");
     } catch (e) {
       let msg = e.message || "不明なエラー";
       if (msg.includes("Failed to fetch") || msg.includes("NetworkError") || msg.includes("Load failed")) {
-        msg = "通信が切断されました。しばらくしてから履歴を確認してください。";
+        msg = "通信が切断されました。履歴に保存されていない場合は、もう一度お試しください。";
       }
-      setError("要約に失敗しました: " + msg);
+      setError("送信できませんでした: " + msg);
+      setSubmitting(false);
+      return;
     }
+    const id = accepted.id;
+    setRecentRecs(prev => [{
+      id,
+      date: new Date().toString(),
+      duration: "",
+      member,
+      interviewee: typedName,
+      status: "queued",
+      sections: null
+    }, ...prev].slice(0, HOME_RECENT_COUNT));
+    if (typedName) setNameCandidates(prev => uniqueNames([typedName, ...prev]));
+    setTranscript("");
+    setInterviewee("");
     setSubmitting(false);
+    setNotice("受け付けました。アプリを閉じても要約は自動で保存されます。");
+    // 続けて要約を今すぐ始めてもらう。応答は待たなくてよい（届かなかった場合も、
+    // 受け付け済みの記録は1分おきの定期実行が要約する）。開いたままなら結果を反映する。
+    gasPost({
+      action: "processRecord",
+      id
+    }, 90000).then(res => {
+      if (res && res.status === "done") {
+        setRecentRecs(prev => prev.map(r => r.id === id ? {
+          ...r,
+          status: "done",
+          sections: normalizeSections(res.sections)
+        } : r));
+      }
+    }).catch(() => {});
   };
   return /*#__PURE__*/React.createElement("div", {
     style: {
@@ -1743,7 +1765,28 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
       fontSize: 12,
       color: C.red
     }
-  }, error), canReadClipboard && !trimmed && /*#__PURE__*/React.createElement("button", {
+  }, error), notice && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "flex-start",
+      gap: 7,
+      background: `${C.green}14`,
+      border: `1px solid ${C.green}35`,
+      borderRadius: 10,
+      padding: "9px 11px",
+      marginBottom: 10,
+      fontSize: 12,
+      lineHeight: 1.6,
+      color: C.text
+    }
+  }, /*#__PURE__*/React.createElement(Ic, {
+    n: "circle-check",
+    size: 14,
+    color: C.green,
+    style: {
+      marginTop: 2
+    }
+  }), /*#__PURE__*/React.createElement("span", null, notice)), canReadClipboard && !trimmed && /*#__PURE__*/React.createElement("button", {
     onClick: pasteFromClipboard,
     disabled: submitting,
     style: {
@@ -1768,7 +1811,10 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
     color: "#fff"
   }), "クリップボードから貼り付け"), /*#__PURE__*/React.createElement("textarea", {
     value: transcript,
-    onChange: e => setTranscript(e.target.value),
+    onChange: e => {
+      setTranscript(e.target.value);
+      setNotice(null);
+    },
     placeholder: canReadClipboard ? "または、ここに直接貼り付け" : "ここに文字起こしを貼り付け",
     rows: trimmed ? 8 : 3,
     style: {
@@ -1881,7 +1927,7 @@ function HomeScreen({ member, onShowHelp, onShowHistory }) {
     size: 14,
     color: "#fff",
     cls: "spin"
-  }), "要約中...（10〜20秒ほど）") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Ic, {
+  }), "送信中...") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Ic, {
     n: "wand-magic-sparkles",
     size: 14,
     color: "#fff"
@@ -2020,7 +2066,7 @@ const HELP_STEPS = [{
   note: "録音の一覧から直接「文字起こしをコピー」すると、うまくコピーされないことがあります。"
 }, {
   title: "貼り付けて要約する",
-  body: "ホーム画面の「クリップボードから貼り付け」を押し、相手・参加者を入れて（以前入れた名前は候補から選べます）「要約する」を押します。10〜20秒ほどで要約が開きます。"
+  body: "ホーム画面の「クリップボードから貼り付け」を押し、相手・参加者を入れて（以前入れた名前は候補から選べます）「要約する」を押します。「受け付けました」と出たら、アプリを閉じても大丈夫です。要約は自動で保存され、10〜20秒ほどで「最近の記録」と履歴に表示されます。"
 }, {
   title: "見返す",
   body: "要約は「履歴」に保存されます。1on1／会議の切り替えや、キーワード・相手の名前で探せます。要約画面の右上「コピー」で他のアプリに貼り付けられ、「編集」で内容を直せます。削除は要約画面のいちばん下からできます。"
