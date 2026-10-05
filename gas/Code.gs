@@ -12,27 +12,53 @@ const SHEET_RECORDS    = "records";
 const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash";
 const GEMINI_API_BASE  = "https://generativelanguage.googleapis.com/v1/models/";
 
-function geminiModel() {
-  return String(PropertiesService.getScriptProperties().getProperty("GEMINI_MODEL") || "").trim() || DEFAULT_GEMINI_MODEL;
-}
-
 // recordsシートの列定義
 const COL = { ID:1, DATE:2, MEMBER:3, INTERVIEWEE:4, STATUS:5, SECTIONS:6, TRANSCRIPT:7, PROCESS_ERROR:8, PROCESSING_STARTED_AT:9 };
 const NUM_COLS    = 9;
 const HEADERS     = ["ID", "日時", "名前", "相手", "状態", "要約", "文字起こし", "エラー", "処理開始時刻"];
 // 状態列の値: "queued"(要約待ち) | "processing"(要約中) | "done"(完了) | "error"(失敗)
 
-// 音声を扱っていた頃の古い列構成（16列）。migrateRecordsSheetでの移行にだけ使う。
-const OLD_COL = { ID:1, DATE:2, MEMBER:4, INTERVIEWEE:5, SECTIONS:8, STATUS:11, PROCESS_ERROR:12, PROCESSING_STARTED_AT:15, TRANSCRIPT:16 };
-const OLD_NUM_COLS = 16;
-const OLD_SHEET_NAMES = ["members", "chunks"]; // 移行時に削除する、使っていないシート
-
 const STALE_PROCESSING_MINUTES = 10; // これ以上"processing"のままの行は実行が異常終了したとみなし再投入する
 const HEADER_ROW  = 1;
 const MAX_TRANSCRIPT_CHARS = 30000;  // アプリ側の上限と合わせる
+const MAX_MEMBER_CHARS = 50;
+const MAX_INTERVIEWEE_CHARS = 100;
+const MAX_SUMMARY_JSON_CHARS = 20000; // 要約1件の大きさの上限（1セルは5万文字まで）
 const HISTORY_MAX_LIMIT = 50;
-// 合言葉を間違えた時に応答を遅らせ、総当たりで合言葉を探られにくくする
+const STATUS_MAX_IDS = 20;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// 合言葉を間違えた時に応答を遅らせ、総当たりで合言葉を探られにくくする。
+// ただし短時間に大量の失敗が来ているときは、待たせる処理がGASの同時実行の枠を
+// 埋めてしまうので、待たずにすぐ断る。
 const AUTH_FAIL_WAIT_MS = 2000;
+const AUTH_FAIL_BURST = 20;          // 10分間にこれを超えて失敗が続いたら、待たずに断る
+const AUTH_FAIL_WINDOW_SEC = 10 * 60;
+
+// スクリプトプロパティは1回の実行の中でまとめて読む（何度も読まないように）
+let propsCache_ = null;
+function prop_(key) {
+  if (!propsCache_) propsCache_ = PropertiesService.getScriptProperties().getProperties();
+  return String(propsCache_[key] || "");
+}
+function setProp_(key, value) {
+  PropertiesService.getScriptProperties().setProperty(key, value);
+  if (propsCache_) propsCache_[key] = value;
+}
+
+function geminiModel() {
+  return prop_("GEMINI_MODEL").trim() || DEFAULT_GEMINI_MODEL;
+}
+
+// 利用者にそのまま見せてよい文言を持つエラー。それ以外のエラーの詳細（内部の
+// 仕組みやGoogle Cloudの情報を含むことがある）はログにだけ残し、アプリには出さない。
+function userError_(message, extra) {
+  const e = new Error(message);
+  e.userMessage = message;
+  if (extra) Object.assign(e, extra);
+  return e;
+}
+const GENERIC_ERROR_MESSAGE = "サーバーでエラーが発生しました。少し時間をおいてもう一度お試しください。";
+const BUSY_MESSAGE = "混み合っています。少し待ってからもう一度お試しください。";
 
 // ================================================================
 // エントリーポイント
@@ -47,7 +73,7 @@ function doPost(e) {
   try {
     const body = JSON.parse(e.postData.contents);
     if (!isAuthorized(body.key)) {
-      Utilities.sleep(AUTH_FAIL_WAIT_MS);
+      if (recordAuthFailure_() <= AUTH_FAIL_BURST) Utilities.sleep(AUTH_FAIL_WAIT_MS);
       return jsonResponse({ success: false, authError: true, error: "合言葉が正しくありません" });
     }
     const action = body.action || "";
@@ -60,6 +86,8 @@ function doPost(e) {
         result = getHistory(body); break;
       case "getRecordStatus":
         result = getRecordStatus(body); break;
+      case "getRecordStatuses":
+        result = getRecordStatuses(body); break;
       case "getTranscript":
         result = getTranscript(body); break;
       case "submitTranscript":
@@ -70,7 +98,7 @@ function doPost(e) {
         result = retryRecord(body); break;
       case "updateRecord":
         // アプリから変えられるのは要約の中身だけ（状態などは書き換えさせない）
-        result = updateRecord({ id: body.id, sections: body.sections }); break;
+        result = updateSummary(body); break;
       case "deleteRecord":
         result = deleteRecord(body); break;
       default:
@@ -79,8 +107,9 @@ function doPost(e) {
 
     return jsonResponse(result);
   } catch (err) {
+    if (err.busy) return jsonResponse({ success: false, busy: true, error: BUSY_MESSAGE });
     console.error("[doPost] error:", err.message, err.stack);
-    return jsonResponse({ success: false, error: err.message });
+    return jsonResponse({ success: false, error: err.userMessage || GENERIC_ERROR_MESSAGE });
   }
 }
 
@@ -93,12 +122,47 @@ function jsonResponse(obj) {
 // 合言葉はスクリプトプロパティ APP_PASSCODE と照合する。未設定のときは
 // 誰も使えないようにする（設定し忘れて誰でも読める状態にならないように）。
 function isAuthorized(key) {
-  const expected = String(PropertiesService.getScriptProperties().getProperty("APP_PASSCODE") || "").trim();
+  const expected = prop_("APP_PASSCODE").trim();
   if (!expected) {
     console.error("[auth] APP_PASSCODE がスクリプトプロパティに設定されていません");
     return false;
   }
   return typeof key === "string" && key.trim() === expected;
+}
+
+// 合言葉の失敗回数（直近10分・全体）を数えて返す
+function recordAuthFailure_() {
+  try {
+    const cache = CacheService.getScriptCache();
+    const n = (parseInt(cache.get("authFailures"), 10) || 0) + 1;
+    cache.put("authFailures", String(n), AUTH_FAIL_WINDOW_SEC);
+    if (n === AUTH_FAIL_BURST + 1) console.warn("[auth] 合言葉の失敗が短時間に続いています（10分間に" + n + "回以上）");
+    return n;
+  } catch (e) {
+    return 0;
+  }
+}
+
+// ================================================================
+// ロック
+// ================================================================
+// シートの書き込みは「IDで行を探す → その行に書く」ので、途中で他の処理が行を
+// 削除すると行がずれて別の記録に書いてしまう。書き込みはすべてロックの中で行い、
+// ロックが取れないときは書き込まずに「混み合っています」を返す（アプリが自動で
+// 送り直す）。以前はロックが取れなくてもそのまま書き込んでいた。
+function withLock_(fn, waitMs) {
+  const lock = LockService.getScriptLock();
+  let got = false;
+  try {
+    got = lock.tryLock(waitMs || 10000);
+  } catch (e) {}
+  if (!got) throw userError_(BUSY_MESSAGE, { busy: true });
+  try {
+    return fn();
+  } finally {
+    SpreadsheetApp.flush(); // 書き込みを確定させてから放す（同時に動く処理がすぐ読めるように）
+    lock.releaseLock();
+  }
 }
 
 // ================================================================
@@ -120,7 +184,7 @@ function getHistory(body) {
   const matched = [];
   for (let i = rows.length - 1; i >= 0; i--) { // 新しい順
     const row = rows[i];
-    if (String(row[COL.MEMBER - 1] || "") !== member) continue;
+    if (readText_(row[COL.MEMBER - 1]) !== member) continue;
     const rec = rowToRecord(row);
     if (!rec) continue;
     if (type && !(rec.sections && rec.sections.meetingType === type)) continue;
@@ -142,10 +206,11 @@ function getHistory(body) {
 
 function searchableText(rec, row) {
   const parts = [rec.interviewee, rowTranscript(row)];
-  const secs = (rec.sections && rec.sections.sections) || [];
+  const secs = (rec.sections && Array.isArray(rec.sections.sections)) ? rec.sections.sections : [];
   secs.forEach(s => {
-    parts.push(s.label || "");
-    (s.items || []).forEach(i => parts.push(String(i)));
+    if (!s) return;
+    parts.push(String(s.label || ""));
+    if (Array.isArray(s.items)) s.items.forEach(i => parts.push(String(i)));
   });
   return parts.join("\n").toLowerCase();
 }
@@ -156,15 +221,26 @@ function searchableText(rec, row) {
 function getTranscript(body) {
   const id = body.id ? String(body.id) : "";
   if (!id) return { success: false, error: "id required" };
-  const sheet = recordsSheet();
-  const row = findRecordRowById(sheet, id);
-  if (row < 0) return { success: false, error: "Record not found: " + id };
-  const values = sheet.getRange(row, 1, 1, NUM_COLS).getValues()[0];
+  const values = readRowById_(id);
+  if (!values) return { success: false, error: "記録が見つかりません" };
   return { success: true, transcript: rowTranscript(values) };
 }
 
+// IDで1行を読む。探してから読むまでの間に行がずれた場合（削除など）に、別の記録を
+// 返さないよう、読んだ行のIDを確かめる。
+function readRowById_(id) {
+  const sheet = recordsSheet();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const row = findRecordRowById(sheet, id);
+    if (row < 0) return null;
+    const values = sheet.getRange(row, 1, 1, NUM_COLS).getValues()[0];
+    if (String(values[COL.ID - 1]) === String(id)) return values;
+  }
+  return null;
+}
+
 function rowTranscript(row) {
-  return String(row[COL.TRANSCRIPT - 1] || "");
+  return readText_(row[COL.TRANSCRIPT - 1]);
 }
 
 // ================================================================
@@ -173,32 +249,47 @@ function rowTranscript(row) {
 function getRecordStatus(body) {
   const id = body.id ? String(body.id) : "";
   if (!id) return { found: false, error: "id required" };
+  const values = readRowById_(id);
+  if (!values) return { found: false };
+  return statusOf_(values);
+}
 
-  const sheet = recordsSheet();
-  const targetRow = findRecordRowById(sheet, id);
-  if (targetRow < 0) return { found: false };
+// 複数の記録の状況をまとめて返す（アプリの状況確認を1回の通信で済ませる）
+function getRecordStatuses(body) {
+  const ids = (Array.isArray(body.ids) ? body.ids : []).map(String).slice(0, STATUS_MAX_IDS);
+  const wanted = {};
+  ids.forEach(id => { wanted[id] = true; });
+  const results = {};
+  readRowsWithoutTranscript_().forEach(row => {
+    const id = String(row[COL.ID - 1]);
+    if (wanted[id]) results[id] = statusOf_(row);
+  });
+  ids.forEach(id => { if (!results[id]) results[id] = { found: false }; });
+  return { success: true, results };
+}
 
-  const values = sheet.getRange(targetRow, 1, 1, NUM_COLS).getValues()[0];
+function statusOf_(values) {
   return {
     found: true,
     status: String(values[COL.STATUS - 1] || ""),
     sections: stripTranscript(parseSections(values[COL.SECTIONS - 1])),
-    error: String(values[COL.PROCESS_ERROR - 1] || "")
+    error: readText_(values[COL.PROCESS_ERROR - 1])
   };
 }
 
 // ================================================================
 // 文字起こしの受け付け
 // ================================================================
-// アプリは文字起こしを保存（＝受け付け）した時点ですぐ利用者に返し、続けて
-// processRecordを呼んで要約を始めてもらう。processRecordが届かなかった場合も、
+// アプリは文字起こしを保存（＝受け付け）した時点ですぐ利用者に返す。要約開始
+// （processRecord）は同時に送られてくる。processRecordが届かなかった場合も、
 // "queued"の記録は1分おきの定期実行（runPendingJobs）が要約する。
 function submitTranscript(body) {
-  const member      = String(body.member || "");
-  const interviewee = String(body.interviewee || "");
+  const member      = String(body.member || "").trim();
+  const interviewee = String(body.interviewee || "").trim().slice(0, MAX_INTERVIEWEE_CHARS);
   const transcript  = String(body.transcript || "").trim();
 
   if (!member) return { success: false, error: "member required" };
+  if (member.length > MAX_MEMBER_CHARS) return { success: false, error: "名前が長すぎます（" + MAX_MEMBER_CHARS + "文字まで）" };
   if (!transcript) return { success: false, error: "文字起こしテキストがありません" };
   if (transcript.length > MAX_TRANSCRIPT_CHARS) {
     return { success: false, error: "文字数が上限（" + MAX_TRANSCRIPT_CHARS + "文字）を超えています" };
@@ -209,10 +300,10 @@ function submitTranscript(body) {
   // 番号が付いていない・形が正しくない場合はこちらで作る。
   const clientId = String(body.id || "");
   const newId    = UUID_PATTERN.test(clientId) ? clientId.toLowerCase() : Utilities.getUuid();
-  const sheet      = recordsSheet();
   const recordDate = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
 
-  return withShortLock(() => {
+  return withLock_(() => {
+    const sheet = recordsSheet();
     const existing = findRecordRowById(sheet, newId);
     if (existing >= 0) {
       const status = String(sheet.getRange(existing, COL.STATUS).getValue() || "");
@@ -220,22 +311,20 @@ function submitTranscript(body) {
       return { success: true, id: newId, status, duplicate: true };
     }
     sheet.appendRow([
-      newId,        // COL.ID
-      recordDate,   // COL.DATE
-      member,       // COL.MEMBER
-      interviewee,  // COL.INTERVIEWEE
-      "queued",     // COL.STATUS
-      "",           // COL.SECTIONS: まだなし
-      transcript,   // COL.TRANSCRIPT
-      "",           // COL.PROCESS_ERROR
-      ""            // COL.PROCESSING_STARTED_AT
+      newId,                    // COL.ID
+      recordDate,               // COL.DATE
+      cellText_(member),        // COL.MEMBER
+      cellText_(interviewee),   // COL.INTERVIEWEE
+      "queued",                 // COL.STATUS
+      "",                       // COL.SECTIONS: まだなし
+      cellText_(transcript),    // COL.TRANSCRIPT
+      "",                       // COL.PROCESS_ERROR
+      ""                        // COL.PROCESSING_STARTED_AT
     ]);
     console.log("[submitTranscript] 受け付け完了 id:", newId);
     return { success: true, id: newId, status: "queued" };
   });
 }
-
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // ================================================================
 // 要約の処理の流れ（その場での要約と、1分おきの定期実行）
@@ -251,14 +340,17 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 // Geminiが指示する時間（60秒まで）ならその場で待つ。定期実行に回すと拾われるまで
 // 最大1分余計にかかるため。アプリが待ちきれずに通信を切っても、GAS側の処理は最後まで
 // 続き、結果はアプリの状況確認で表示される。
-const RETRY_POLICY_SYNC = { maxAttempts: 4, budgetMs: 100 * 1000, max429WaitSec: 60, serverErrorWaitSec: () => 2 };
+const RETRY_POLICY_SYNC = { maxAttempts: 4, budgetMs: 100 * 1000, max429WaitSec: 60, callReserveMs: 0, serverErrorWaitSec: () => 2 };
+// 定期実行での要約。1件あたり最大4分。待ってからやり直す前に、最後の呼び出しに
+// かかりうる時間（60秒）を見込んで、締め切りを越えそうならやり直さない。
+const RETRY_POLICY_BACKGROUND = { maxAttempts: 6, budgetMs: 4 * 60 * 1000, max429WaitSec: 60, callReserveMs: 60 * 1000, serverErrorWaitSec: attempt => Math.min(attempt * 5, 20) };
+// 1回の定期実行で新しい記録を拾い始めるのは、開始からこの時間まで
+const RUN_PICKUP_LIMIT_MS = 60 * 1000;
+// 1回の定期実行は、GASの実行時間の上限（6分）より手前のこの時間までに必ず終える
+const RUN_HARD_LIMIT_MS = 330 * 1000;
 // 受け付け（submitTranscript）と要約開始（processRecord）はアプリから同時に送られて
 // くるので、要約開始が先に着いた場合は、受け付けの保存をこの時間まで待つ
 const WAIT_FOR_SUBMIT_MS = 20 * 1000;
-// 定期実行での要約。GASの実行時間上限（6分）に収まるよう、1件あたり最大4分。
-const RETRY_POLICY_BACKGROUND = { maxAttempts: 6, budgetMs: 4 * 60 * 1000, max429WaitSec: 60, serverErrorWaitSec: attempt => Math.min(attempt * 5, 20) };
-// 1回の定期実行で新しい記録を拾い始めるのは、開始からこの時間まで
-const RUN_PICKUP_LIMIT_MS = 60 * 1000;
 
 function processRecord(body) {
   const id = body.id ? String(body.id) : "";
@@ -278,10 +370,16 @@ function processRecord(body) {
   try {
     const t0 = Date.now();
     const sections = callGeminiSummarize(job.transcript, auth, RETRY_POLICY_SYNC);
-    console.log("[processRecord] 要約にかかった時間:", ((Date.now() - t0) / 1000).toFixed(1), "秒 ／ 文字数:", job.transcript.length, "／ 種別:", sections.meetingType || "不明");
+    console.log("[processRecord] 要約にかかった時間:", ((Date.now() - t0) / 1000).toFixed(1), "秒 ／ 文字数:", job.transcript.length, "／ 種別:", sections.meetingType);
     finishJob_(job, { sections });
     return { success: true, id, status: "done", sections };
   } catch (e) {
+    if (e.permanent) {
+      // やり直しても同じ結果になるもの（安全確認での拒否など）は、定期実行に回さず失敗にする
+      console.warn("[processRecord] やり直しても結果が変わらないため失敗にする id:", id, e.message);
+      finishJob_(job, { error: e.userMessage || GENERIC_ERROR_MESSAGE });
+      return { success: true, id, status: "error", error: e.userMessage || GENERIC_ERROR_MESSAGE };
+    }
     console.warn("[processRecord] その場での要約をあきらめ、定期実行に任せる id:", id, e.message);
     finishJob_(job, { requeue: true });
     return { success: true, id, status: "queued" };
@@ -292,6 +390,8 @@ function processRecord(body) {
 // 複数件たまっていても、拾い始めるのは開始から1分まで（長引いた分は次の回に回す）。
 function runPendingJobs() {
   const startedAt = Date.now();
+  // 要約待ちが無ければ、状態の列だけ読んですぐ終える（毎分動くので軽くしておく）
+  if (findQueuedRow_(recordsSheet()) < 0) return;
   let auth;
   try {
     auth = getGeminiAuth();
@@ -299,49 +399,53 @@ function runPendingJobs() {
     console.error("[runPendingJobs] 認証情報を用意できないため中断:", e.message);
     return;
   }
+  const runEnd = startedAt + RUN_HARD_LIMIT_MS;
   while (Date.now() - startedAt < RUN_PICKUP_LIMIT_MS) {
     const job = claimQueuedRow_(null);
     if (!job) return;
     try {
-      if (!job.transcript) throw new Error("文字起こしテキストがありません");
+      if (!job.transcript) throw userError_("文字起こしテキストがありません", { permanent: true });
       console.log("[runPendingJobs] 要約開始 id:", job.id);
-      const sections = callGeminiSummarize(job.transcript, auth, RETRY_POLICY_BACKGROUND);
+      const t0 = Date.now();
+      const policy = Object.assign({}, RETRY_POLICY_BACKGROUND, {
+        deadline: Math.min(Date.now() + RETRY_POLICY_BACKGROUND.budgetMs, runEnd)
+      });
+      const sections = callGeminiSummarize(job.transcript, auth, policy);
       const result = finishJob_(job, { sections });
-      console.log("[runPendingJobs] 完了 id:", job.id, "（" + result + "）");
+      console.log("[runPendingJobs] 完了 id:", job.id, "（" + result + "）", ((Date.now() - t0) / 1000).toFixed(1) + "秒");
     } catch (e) {
-      const result = finishJob_(job, { error: e.message });
+      const result = finishJob_(job, { error: e.userMessage || GENERIC_ERROR_MESSAGE });
       console.error("[runPendingJobs] 失敗 id:", job.id, e.message, "（" + result + "）");
     }
   }
 }
 
+// 状態の列だけを読んで、要約待ち（queued）の行を探す（なければ-1）
+function findQueuedRow_(sheet) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= HEADER_ROW) return -1;
+  const statuses = sheet.getRange(HEADER_ROW + 1, COL.STATUS, lastRow - HEADER_ROW, 1).getValues();
+  for (let i = 0; i < statuses.length; i++) {
+    if (String(statuses[i][0]) === "queued") return HEADER_ROW + 1 + i;
+  }
+  return -1;
+}
+
 // queuedの行を1件選んでprocessingに切り替え、内容と目印を返す（なければnull）。
-// idを指定するとその行だけを対象にする。
+// idを指定するとその行だけを対象にする。ロックが取れなければnull（次の機会に任せる）。
 function claimQueuedRow_(id) {
   const lock = LockService.getScriptLock();
   let gotLock = false;
   try {
     gotLock = lock.tryLock(10000);
   } catch (e) {}
-  if (!gotLock) return null; // 取れなければ次の機会（定期実行）に任せる
+  if (!gotLock) return null;
   try {
     const sheet = recordsSheet();
-    let row = -1;
-    let values = null;
-    if (id) {
-      row = findRecordRowById(sheet, id);
-      if (row >= 0) values = sheet.getRange(row, 1, 1, NUM_COLS).getValues()[0];
-    } else {
-      const rows = readAllRows();
-      for (let i = 0; i < rows.length; i++) {
-        if (String(rows[i][COL.STATUS - 1] || "") === "queued") {
-          row = HEADER_ROW + 1 + i;
-          values = rows[i];
-          break;
-        }
-      }
-    }
-    if (row < 0 || String(values[COL.STATUS - 1] || "") !== "queued") return null;
+    const row = id ? findRecordRowById(sheet, id) : findQueuedRow_(sheet);
+    if (row < 0) return null;
+    const values = sheet.getRange(row, 1, 1, NUM_COLS).getValues()[0];
+    if (String(values[COL.STATUS - 1] || "") !== "queued") return null;
     sheet.getRange(row, COL.STATUS).setValue("processing");
     const startedCell = sheet.getRange(row, COL.PROCESSING_STARTED_AT);
     startedCell.setValue(new Date());
@@ -361,30 +465,37 @@ function claimQueuedRow_(id) {
 // 要約の結果を書き込む。outcome は { sections } | { requeue: true } | { error: "..." }。
 // 要約できた場合は、まだ完了になっていなければ（二重に処理された場合も）書き込む。
 // 戻す・失敗にするのは、その行を今も自分が処理している場合だけ。
+// 要約に時間をかけた後なので、ロックは長めに（30秒）待つ。
 function finishJob_(job, outcome) {
-  return withShortLock(() => {
-    const sheet = recordsSheet();
-    const row = findRecordRowById(sheet, job.id);
-    if (row < 0) return "削除済み";
-    const values = sheet.getRange(row, 1, 1, NUM_COLS).getValues()[0];
-    const status = String(values[COL.STATUS - 1] || "");
-    if (outcome.sections) {
-      if (status === "done") return "完了済みのため書き込まず";
-      sheet.getRange(row, COL.SECTIONS).setValue(JSON.stringify(stripTranscript(outcome.sections)));
-      sheet.getRange(row, COL.STATUS).setValue("done");
-      sheet.getRange(row, COL.PROCESS_ERROR).setValue("");
-      return "完了";
-    }
-    const mine = status === "processing" && Math.abs(toMillis_(values[COL.PROCESSING_STARTED_AT - 1]) - job.token) < 1000;
-    if (!mine) return "他の処理が担当中のため書き込まず";
-    if (outcome.requeue) {
-      sheet.getRange(row, COL.STATUS).setValue("queued");
-      return "要約待ちに戻した";
-    }
-    sheet.getRange(row, COL.STATUS).setValue("error");
-    sheet.getRange(row, COL.PROCESS_ERROR).setValue(outcome.error || "不明なエラー");
-    return "失敗として記録";
-  });
+  try {
+    return withLock_(() => {
+      const sheet = recordsSheet();
+      const row = findRecordRowById(sheet, job.id);
+      if (row < 0) return "削除済み";
+      const values = sheet.getRange(row, 1, 1, NUM_COLS).getValues()[0];
+      const status = String(values[COL.STATUS - 1] || "");
+      if (outcome.sections) {
+        if (status === "done") return "完了済みのため書き込まず";
+        sheet.getRange(row, COL.SECTIONS).setValue(JSON.stringify(outcome.sections));
+        sheet.getRange(row, COL.STATUS).setValue("done");
+        sheet.getRange(row, COL.PROCESS_ERROR).setValue("");
+        return "完了";
+      }
+      const mine = status === "processing" && Math.abs(toMillis_(values[COL.PROCESSING_STARTED_AT - 1]) - job.token) < 1000;
+      if (!mine) return "他の処理が担当中のため書き込まず";
+      if (outcome.requeue) {
+        sheet.getRange(row, COL.STATUS).setValue("queued");
+        return "要約待ちに戻した";
+      }
+      sheet.getRange(row, COL.STATUS).setValue("error");
+      sheet.getRange(row, COL.PROCESS_ERROR).setValue(cellText_(outcome.error || GENERIC_ERROR_MESSAGE));
+      return "失敗として記録";
+    }, 30000);
+  } catch (e) {
+    // ロックが取れなかった場合。processingのまま残り、10分後に拾い直される
+    console.error("[finishJob_] 結果を書き込めませんでした id:", job.id, e.message);
+    return "書き込み失敗";
+  }
 }
 
 function toMillis_(v) {
@@ -400,10 +511,10 @@ function toMillis_(v) {
 function retryRecord(body) {
   const id = body.id ? String(body.id) : "";
   if (!id) return { success: false, error: "id required" };
-  return withShortLock(() => {
+  return withLock_(() => {
     const sheet = recordsSheet();
     const row = findRecordRowById(sheet, id);
-    if (row < 0) return { success: false, error: "Record not found: " + id };
+    if (row < 0) return { success: false, error: "記録が見つかりません" };
     const status = String(sheet.getRange(row, COL.STATUS).getValue() || "");
     if (status !== "error") return { success: true, status };
     sheet.getRange(row, COL.STATUS).setValue("queued");
@@ -411,22 +522,6 @@ function retryRecord(body) {
     console.log("[retryRecord] 再受け付け完了 id:", id);
     return { success: true, status: "queued" };
   });
-}
-
-// 対話的な操作向けの短時間ロック。数百ms〜数秒で終わる想定なので、ロックが
-// 取れなくても長く待たせず、そのまま処理を続行する（応答性を優先）。
-function withShortLock(fn) {
-  const lock = LockService.getScriptLock();
-  let gotLock = false;
-  try {
-    gotLock = lock.tryLock(5000);
-  } catch (e) {}
-  try {
-    return fn();
-  } finally {
-    SpreadsheetApp.flush(); // 書き込みを確定させてから放す（同時に動く処理がすぐ読めるように）
-    if (gotLock) lock.releaseLock();
-  }
 }
 
 // ================================================================
@@ -441,10 +536,11 @@ const RETRYABLE_SERVER_CODES = [500, 502, 503, 504];
 // 直ることがあるため、混雑と同様にやり直す。
 const RETRYABLE_FINISH_REASONS = ["MALFORMED_RESPONSE"];
 const DEFAULT_429_WAIT_SEC = 15;
+const RATE_LIMIT_MESSAGE = "AIの利用回数が上限に達しています（無料枠）。少し時間をおいて再試行してください。";
 
 function fetchGeminiWithRetry(url, payload, label, auth, policy) {
   const p = policy || RETRY_POLICY_BACKGROUND;
-  const deadline = Date.now() + p.budgetMs;
+  const deadline = p.deadline || (Date.now() + p.budgetMs);
   let resText;
   for (let attempt = 1; ; attempt++) {
     const res = UrlFetchApp.fetch(url, makeOptions(payload, auth));
@@ -458,19 +554,19 @@ function fetchGeminiWithRetry(url, payload, label, auth, policy) {
       const info = parseRateLimit_(resText);
       console.warn("[" + label + " API] 429の詳細:", info.message);
       waitSec = info.retryDelaySec || DEFAULT_429_WAIT_SEC;
-      busyMessage = "AIの利用回数が上限に達しています（無料枠）。少し時間をおいて再試行してください。";
+      busyMessage = RATE_LIMIT_MESSAGE;
       if (waitSec > p.max429WaitSec) {
-        throw new Error(busyMessage + "（再開まで約" + Math.ceil(waitSec) + "秒）");
+        throw userError_(RATE_LIMIT_MESSAGE, { detail: "再開まで約" + Math.ceil(waitSec) + "秒" });
       }
     } else if (RETRYABLE_SERVER_CODES.indexOf(resCode) !== -1 || isRetryableFinish_(resCode, resText)) {
       waitSec = p.serverErrorWaitSec(attempt);
-      busyMessage = "AIが混み合っています（" + (resCode === 200 ? "応答の形式エラー" : "HTTP " + resCode) + "）。少し時間をおいて再試行してください。";
+      busyMessage = "AIが混み合っています。少し時間をおいて再試行してください。";
     } else {
       return resText;
     }
 
-    if (attempt >= p.maxAttempts || Date.now() + waitSec * 1000 > deadline) {
-      throw new Error(busyMessage);
+    if (attempt >= p.maxAttempts || Date.now() + waitSec * 1000 + (p.callReserveMs || 0) > deadline) {
+      throw userError_(busyMessage);
     }
     console.log("[" + label + " API] " + waitSec + "秒後にやり直し");
     Utilities.sleep(waitSec * 1000);
@@ -484,7 +580,7 @@ function isRetryableFinish_(resCode, resText) {
     const finishReason = data.candidates && data.candidates[0] && data.candidates[0].finishReason;
     return !!finishReason && RETRYABLE_FINISH_REASONS.indexOf(finishReason) !== -1;
   } catch (e) {
-    // JSON解析失敗はここではやり直さず、extractGeminiText側のエラーメッセージに委ねる
+    // JSON解析失敗はここではやり直さず、extractGeminiText側のエラーに委ねる
     return false;
   }
 }
@@ -503,22 +599,48 @@ function parseRateLimit_(resText) {
   }
 }
 
+// 安全確認で止められた・長すぎて途中で止まったなど、やり直しても結果が変わらない理由
+const BLOCKED_FINISH_REASONS = ["SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII", "RECITATION"];
+
+// Geminiの応答から本文を取り出す。分かっている失敗の理由は、利用者向けの文言にする
+// （以前はGeminiの応答の生の文字列をそのままエラーとして記録していた）。
 function extractGeminiText(resText, label) {
   let data;
   try {
     data = JSON.parse(resText);
   } catch (e) {
-    throw new Error(label + ": レスポンスの解析に失敗しました（" + resText.slice(0, 200) + "）");
+    console.error("[" + label + "] 応答を解析できません:", String(resText).slice(0, 300));
+    throw userError_("AIからの応答を読み取れませんでした。少し時間をおいて再試行してください。");
   }
-  if (data.error) throw new Error(label + "APIエラー " + data.error.code + ": " + data.error.message);
+  if (data.error) {
+    // 400 のときは呼び出し側で設定を変えてやり直すため、コードをメッセージに含める
+    console.error("[" + label + "] APIエラー:", data.error.code, data.error.message);
+    throw userError_("AIの呼び出しでエラーが発生しました（" + data.error.code + "）。少し時間をおいて再試行してください。", {
+      apiCode: data.error.code,
+      apiMessage: String(data.error.message || "")
+    });
+  }
+  const blockReason = data.promptFeedback && data.promptFeedback.blockReason;
+  if (blockReason) {
+    throw userError_("AIの安全確認により要約できませんでした（" + blockReason + "）。内容を見直してください。", { permanent: true });
+  }
 
   const candidate = data.candidates && data.candidates[0];
-  if (!candidate) throw new Error(label + ": レスポンスにcandidatesがありません");
+  if (!candidate) throw userError_("AIから要約が返ってきませんでした。少し時間をおいて再試行してください。");
 
-  const finishReason = candidate.finishReason || "不明";
-  const text = candidate.content && candidate.content.parts && candidate.content.parts[0] && candidate.content.parts[0].text;
-  if (!text) throw new Error(label + "失敗: finishReason=" + finishReason + " のためテキストが返されませんでした");
-
+  const finishReason = String(candidate.finishReason || "");
+  if (BLOCKED_FINISH_REASONS.indexOf(finishReason) !== -1) {
+    throw userError_("AIの安全確認により要約できませんでした（" + finishReason + "）。内容を見直してください。", { permanent: true });
+  }
+  if (finishReason === "MAX_TOKENS") {
+    throw userError_("要約が長くなりすぎて途中で止まりました。録音を短く分けて送ってください。", { permanent: true });
+  }
+  const parts = (candidate.content && candidate.content.parts) || [];
+  const text = parts.filter(p => p && typeof p.text === "string" && !p.thought).map(p => p.text).join("");
+  if (!text) {
+    console.error("[" + label + "] 本文が空です finishReason=" + finishReason);
+    throw userError_("AIから要約が返ってきませんでした。少し時間をおいて再試行してください。");
+  }
   return text;
 }
 
@@ -535,6 +657,9 @@ const SUMMARIZE_FAST_CONFIG = {
   responseMimeType: "application/json",
   thinkingConfig: { thinkingLevel: "low" }
 };
+// 400のエラー文がこれに当てはまるときだけ「高速化の設定のせい」とみなして覚える
+// （一時的な別の原因の400で、ずっと遅い設定のままにならないように）
+const FAST_CONFIG_ERROR_PATTERN = /thinking|response_?mime|mime_?type|generation_?config|unknown name/i;
 
 function callGeminiSummarize(transcript, auth, policy) {
   const url = GEMINI_API_BASE + geminiModel() + ":generateContent";
@@ -548,23 +673,23 @@ function callGeminiSummarize(transcript, auth, policy) {
 
   // 高速化の設定を受け付けないモデルは覚えておき、次からは最初から従来の設定で呼ぶ
   // （毎回、断られる呼び出しを1回はさむと、その分だけ遅くなるため）
-  const props = PropertiesService.getScriptProperties();
   const noFastKey = "NO_FAST_CONFIG_" + geminiModel();
   let jsonText;
-  if (props.getProperty(noFastKey)) {
+  if (prop_(noFastKey)) {
     jsonText = extractGeminiText(fetchGeminiWithRetry(url, buildPayload(baseConfig), "要約", auth, policy), "要約");
   } else {
     try {
       const resText = fetchGeminiWithRetry(url, buildPayload(Object.assign({}, baseConfig, SUMMARIZE_FAST_CONFIG)), "要約", auth, policy);
       jsonText = extractGeminiText(resText, "要約");
     } catch (e) {
-      if (e.message.indexOf("APIエラー 400") === -1) throw e;
-      console.warn("[要約] 高速化の設定が受け付けられなかったため、従来の設定でやり直します:", e.message);
+      if (e.apiCode !== 400) throw e;
+      console.warn("[要約] 高速化の設定が受け付けられなかったため、従来の設定でやり直します:", e.apiMessage);
       const resText = fetchGeminiWithRetry(url, buildPayload(baseConfig), "要約", auth, policy);
       jsonText = extractGeminiText(resText, "要約");
-      // 従来の設定なら通った＝原因は高速化の設定なので、このモデルでは次から使わない
-      props.setProperty(noFastKey, "1");
-      console.log("[要約] " + geminiModel() + " では次から高速化の設定を使いません");
+      if (FAST_CONFIG_ERROR_PATTERN.test(e.apiMessage || "")) {
+        setProp_(noFastKey, "1");
+        console.log("[要約] " + geminiModel() + " では次から高速化の設定を使いません");
+      }
     }
   }
 
@@ -575,13 +700,59 @@ function callGeminiSummarize(transcript, auth, policy) {
   try {
     parsed = JSON.parse(jsonText);
   } catch (parseErr) {
-    throw new Error("要約JSONのパース失敗: " + jsonText.slice(0, 200));
+    console.error("[要約] JSONとして読めない応答:", jsonText.slice(0, 300));
+    throw userError_("AIの要約を読み取れませんでした。少し時間をおいて再試行してください。");
   }
+  // 形を確かめて整える（崩れた形のまま保存すると、検索や画面の表示が壊れるため）。
+  // 文字起こしはTRANSCRIPT列にあるので、要約には入れない。
+  return normalizeSummary_(parsed);
+}
 
-  if (!parsed.sections) throw new Error("要約レスポンスにsectionsがありません: " + jsonText.slice(0, 200));
+// 要約の形を確かめて、アプリが表示できる形に整える。
+// { meetingType: "1on1"|"group", sections: [{key,label,emoji,items:[文字列]}], analysis?(1on1のみ) }
+function normalizeSummary_(raw) {
+  const invalid = () => userError_("要約の形式が正しくありません。");
+  if (!raw || typeof raw !== "object" || !Array.isArray(raw.sections)) throw invalid();
+  const toText = v => (v == null ? "" : typeof v === "object" ? JSON.stringify(v) : String(v)).trim();
+  const sections = raw.sections
+    .filter(s => s && typeof s === "object" && toText(s.label))
+    .slice(0, 12)
+    .map(s => ({
+      key: toText(s.key).slice(0, 40),
+      label: toText(s.label).slice(0, 60),
+      emoji: toText(s.emoji).slice(0, 8),
+      items: (Array.isArray(s.items) ? s.items : (s.items == null ? [] : [s.items]))
+        .map(i => toText(i).slice(0, 2000))
+        .filter(Boolean)
+        .slice(0, 30)
+    }));
+  if (!sections.length) throw invalid();
 
-  // 文字起こしはTRANSCRIPT列にあるので、要約には入れない（一覧を軽くするため）
-  return parsed;
+  const meetingType = raw.meetingType === "1on1" || raw.meetingType === "group"
+    ? raw.meetingType
+    : (raw.analysis ? "1on1" : "group");
+  const out = { meetingType, sections };
+
+  const a = raw.analysis;
+  if (meetingType === "1on1" && a && typeof a === "object") {
+    const pct = v => {
+      const n = Number(v);
+      return isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : null;
+    };
+    const analysis = {};
+    const sr = a.speakingRatio || {};
+    const self = pct(sr.self);
+    const other = pct(sr.other);
+    if (self !== null && other !== null && self + other > 0) {
+      const s = Math.round(self * 100 / (self + other));
+      analysis.speakingRatio = { self: s, other: 100 - s }; // 合計を100にそろえる
+    }
+    if (pct(a.listeningScore) !== null) analysis.listeningScore = pct(a.listeningScore);
+    if (a.listeningComment) analysis.listeningComment = toText(a.listeningComment).slice(0, 200);
+    if (pct(a.openQuestionRatio) !== null) analysis.openQuestionRatio = pct(a.openQuestionRatio);
+    if (Object.keys(analysis).length) out.analysis = analysis;
+  }
+  return out;
 }
 
 // 実質的なメインの要約プロンプト。1on1（面談）と複数人の会議が同じ入り口から
@@ -649,7 +820,7 @@ function getGeminiAuth() {
 }
 
 function requireGcpProjectId() {
-  const projectId = PropertiesService.getScriptProperties().getProperty("GCP_PROJECT_ID");
+  const projectId = prop_("GCP_PROJECT_ID").trim();
   if (!projectId) throw new Error("GCP_PROJECT_ID がスクリプトプロパティに設定されていません");
   return projectId;
 }
@@ -672,25 +843,28 @@ function makeOptions(payload, auth) {
 }
 
 // ================================================================
-// レコード更新
+// 要約の編集（アプリの「編集」→「保存」）
 // ================================================================
-function updateRecord(body) {
-  const { id, sections, status, processError } = body;
-  if (!id) return { success: false, error: "id is required" };
-
-  // 行の検索と書き込みの間に他の実行が同じ行をいじる余地をなくすため短時間ロックする
-  return withShortLock(() => {
+function updateSummary(body) {
+  const id = body.id ? String(body.id) : "";
+  if (!id) return { success: false, error: "id required" };
+  let sections;
+  try {
+    sections = normalizeSummary_(body.sections);
+  } catch (e) {
+    return { success: false, error: e.userMessage || "要約の形式が正しくありません。" };
+  }
+  const json = JSON.stringify(sections);
+  if (json.length > MAX_SUMMARY_JSON_CHARS) {
+    return { success: false, error: "要約が長すぎます（" + MAX_SUMMARY_JSON_CHARS + "文字まで）" };
+  }
+  return withLock_(() => {
     const sheet = recordsSheet();
-    const targetRow = findRecordRowById(sheet, id);
-    if (targetRow < 0) return { success: false, error: "Record not found: " + id };
-
-    if (sections !== undefined && sections !== null) {
-      sheet.getRange(targetRow, COL.SECTIONS).setValue(JSON.stringify(stripTranscript(sections)));
-    }
-    if (status !== undefined)       sheet.getRange(targetRow, COL.STATUS).setValue(status);
-    if (processError !== undefined) sheet.getRange(targetRow, COL.PROCESS_ERROR).setValue(processError);
-    console.log("[updateRecord] 更新完了 row:", targetRow, "id:", id);
-    return { success: true };
+    const row = findRecordRowById(sheet, id);
+    if (row < 0) return { success: false, error: "記録が見つかりません" };
+    sheet.getRange(row, COL.SECTIONS).setValue(json);
+    console.log("[updateSummary] 更新完了 id:", id);
+    return { success: true, sections };
   });
 }
 
@@ -698,15 +872,14 @@ function updateRecord(body) {
 // レコード削除
 // ================================================================
 function deleteRecord(body) {
-  const { id } = body;
+  const id = body.id ? String(body.id) : "";
   if (!id) return { success: false, error: "id required" };
-
   // 行の検索と削除の間に他の実行が行番号をずらす（挿入・削除）余地をなくす
-  return withShortLock(() => {
+  return withLock_(() => {
     const sheet = recordsSheet();
-    const targetRow = findRecordRowById(sheet, id);
-    if (targetRow < 0) return { success: false, error: "Record not found: " + id };
-    sheet.deleteRow(targetRow);
+    const row = findRecordRowById(sheet, id);
+    if (row < 0) return { success: true, alreadyDeleted: true }; // 送り直しなどで既に消えている
+    sheet.deleteRow(row);
     return { success: true };
   });
 }
@@ -726,32 +899,31 @@ function warmup() {
 
 // 要約中にGASの実行時間上限などで異常終了すると、行が"processing"のまま
 // 取り残されることがある。一定時間"processing"のままの行を"queued"に戻し、
-// 次回の定期実行で拾い直す。
+// 次回の定期実行で拾い直す。読んでから書くまでの間に行がずれないよう、ロックの中で行う。
 function reapStaleProcessing() {
   try {
-    const sheet = recordsSheet();
-    const lastRow = sheet.getLastRow();
-    if (lastRow <= HEADER_ROW) return;
-
-    const numRows = lastRow - HEADER_ROW;
-    const statuses = sheet.getRange(HEADER_ROW + 1, COL.STATUS, numRows, 1).getValues();
-    const startedAts = sheet.getRange(HEADER_ROW + 1, COL.PROCESSING_STARTED_AT, numRows, 1).getValues();
-    const thresholdMs = STALE_PROCESSING_MINUTES * 60 * 1000;
-    const now = new Date().getTime();
-    let reverted = 0;
-
-    for (let i = 0; i < numRows; i++) {
-      if (String(statuses[i][0]) !== "processing") continue;
-      const startedAt = startedAts[i][0];
-      const startedMs = startedAt instanceof Date ? startedAt.getTime() : 0;
-      if (!startedMs || now - startedMs > thresholdMs) {
-        sheet.getRange(HEADER_ROW + 1 + i, COL.STATUS).setValue("queued");
-        reverted++;
+    withLock_(() => {
+      const sheet = recordsSheet();
+      const lastRow = sheet.getLastRow();
+      if (lastRow <= HEADER_ROW) return;
+      const numRows = lastRow - HEADER_ROW;
+      const statuses = sheet.getRange(HEADER_ROW + 1, COL.STATUS, numRows, 1).getValues();
+      const startedAts = sheet.getRange(HEADER_ROW + 1, COL.PROCESSING_STARTED_AT, numRows, 1).getValues();
+      const thresholdMs = STALE_PROCESSING_MINUTES * 60 * 1000;
+      const now = Date.now();
+      let reverted = 0;
+      for (let i = 0; i < numRows; i++) {
+        if (String(statuses[i][0]) !== "processing") continue;
+        const startedMs = toMillis_(startedAts[i][0]);
+        if (!startedMs || now - startedMs > thresholdMs) {
+          sheet.getRange(HEADER_ROW + 1 + i, COL.STATUS).setValue("queued");
+          reverted++;
+        }
       }
-    }
-    if (reverted > 0) console.log("[reapStaleProcessing] " + reverted + "件を再投入しました");
+      if (reverted > 0) console.log("[reapStaleProcessing] " + reverted + "件を再投入しました");
+    });
   } catch (e) {
-    console.error("[reapStaleProcessing] error:", e.message);
+    console.warn("[reapStaleProcessing] 今回は見送り:", e.message);
   }
 }
 
@@ -762,19 +934,12 @@ function SS() {
   return SpreadsheetApp.getActiveSpreadsheet();
 }
 
-// recordsシートを返す（なければ作る）。古い16列のままなら、読み書きすると
-// 列がずれて記録が壊れるため、migrateRecordsSheetを実行するまでエラーにする。
-let recordsSheetChecked_ = null;
+// recordsシートを返す（なければ作る）
+let recordsSheetCache_ = null;
 function recordsSheet() {
-  if (recordsSheetChecked_) return recordsSheetChecked_;
-  let sheet = SS().getSheetByName(SHEET_RECORDS);
-  if (!sheet) {
-    sheet = createRecordsSheet_(SHEET_RECORDS);
-  } else if (isOldLayout_(sheet)) {
-    throw new Error("記録シートの移行が終わっていません。管理者がmigrateRecordsSheetを実行するまでお待ちください。");
-  }
-  recordsSheetChecked_ = sheet;
-  return sheet;
+  if (recordsSheetCache_) return recordsSheetCache_;
+  recordsSheetCache_ = SS().getSheetByName(SHEET_RECORDS) || createRecordsSheet_(SHEET_RECORDS);
+  return recordsSheetCache_;
 }
 
 function createRecordsSheet_(name) {
@@ -792,9 +957,16 @@ function createRecordsSheet_(name) {
   return sheet;
 }
 
-function isOldLayout_(sheet) {
-  return sheet.getLastColumn() >= OLD_NUM_COLS &&
-    String(sheet.getRange(1, OLD_NUM_COLS).getValue()) === "transcript";
+// 先頭が = + - @ の文字は、スプレッドシートで数式として扱われることがある
+// （例：「- 議題」で始まる文字起こしがエラーになる、外部へデータを送る式が入る）。
+// 書くときは先頭に ' を付けて文字として保存し、読むときに外す。
+function cellText_(s) {
+  const t = String(s == null ? "" : s);
+  return /^[=+\-@]/.test(t) ? "'" + t : t;
+}
+function readText_(v) {
+  const t = String(v == null ? "" : v);
+  return /^'[=+\-@]/.test(t) ? t.slice(1) : t;
 }
 
 // recordsシートの見出しを除く全行（古い順）
@@ -836,6 +1008,7 @@ function parseSections(raw) {
   }
 }
 
+// 古い記録には、要約の中に文字起こし(_transcript)が残っていることがあるので取り除いて返す
 function stripTranscript(sections) {
   if (!sections || typeof sections !== "object") return sections;
   const copy = Object.assign({}, sections);
@@ -847,17 +1020,16 @@ function rowToRecord(row) {
   try {
     const idVal = row[COL.ID - 1];
     if (!idVal && idVal !== 0) return null;
-
     return {
       id:            String(idVal),
       date:          String(row[COL.DATE - 1] || ""),
-      member:        String(row[COL.MEMBER - 1] || ""),
-      interviewee:   String(row[COL.INTERVIEWEE - 1] || ""),
-      sections:     stripTranscript(parseSections(row[COL.SECTIONS - 1])),
+      member:        readText_(row[COL.MEMBER - 1]),
+      interviewee:   readText_(row[COL.INTERVIEWEE - 1]),
+      sections:      stripTranscript(parseSections(row[COL.SECTIONS - 1])),
       // 文字起こしの列を読んでいない場合（null）は、あるものとして扱う（受け付け時に必ず保存しているため）
       hasTranscript: row[COL.TRANSCRIPT - 1] === null ? true : !!rowTranscript(row),
       status:        String(row[COL.STATUS - 1] || ""),
-      processError:  String(row[COL.PROCESS_ERROR - 1] || "")
+      processError:  readText_(row[COL.PROCESS_ERROR - 1])
     };
   } catch (e) {
     return null;
@@ -883,74 +1055,6 @@ function setupTriggers() {
   ScriptApp.newTrigger("runPendingJobs").timeBased().everyMinutes(1).create();
   ScriptApp.newTrigger("warmup").timeBased().everyMinutes(5).create();
   console.log("[setupTriggers] 定期実行を設定しました: runPendingJobs（1分おき）, warmup（5分おき）");
-}
-
-// ================================================================
-// 記録シートの移行（Apps Scriptエディタから手動で一度だけ実行）
-// ================================================================
-// 音声を扱っていた頃の16列の records シートを、今使っている9列に作り直す。
-// ・今の records は「records_旧」に名前を変えて残す（中身を確認してから手で削除する）
-// ・要約の中に重複して入っていた文字起こし(_transcript)は「文字起こし」列にまとめる
-// ・使っていない members / chunks シートは削除する
-// 移行済みなら記録には何もしないので、何回実行しても安全。
-function migrateRecordsSheet() {
-  const lock = LockService.getScriptLock();
-  lock.waitLock(30000); // 移行中にアプリからの書き込みが割り込まないようにする
-  try {
-    const ss = SS();
-    const old = ss.getSheetByName(SHEET_RECORDS);
-    if (!old) {
-      recordsSheet();
-      console.log("records シートが無かったので、新しい形で作りました");
-    } else if (!isOldLayout_(old)) {
-      console.log("records シートはすでに新しい形です（記録はそのまま）");
-    } else {
-      const lastRow = old.getLastRow();
-      const values = lastRow > HEADER_ROW ? old.getRange(HEADER_ROW + 1, 1, lastRow - HEADER_ROW, OLD_NUM_COLS).getValues() : [];
-      const rows = values.filter(r => String(r[OLD_COL.ID - 1] || "")).map(r => {
-        const rawSections = r[OLD_COL.SECTIONS - 1];
-        const parsed = parseSections(rawSections);
-        const transcript = String(r[OLD_COL.TRANSCRIPT - 1] || "") ||
-          (parsed && parsed._transcript ? String(parsed._transcript) : "");
-        const sections = parsed ? JSON.stringify(stripTranscript(parsed)) : String(rawSections || "");
-        const row = [];
-        row[COL.ID - 1]                    = r[OLD_COL.ID - 1];
-        row[COL.DATE - 1]                  = r[OLD_COL.DATE - 1];
-        row[COL.MEMBER - 1]                = String(r[OLD_COL.MEMBER - 1] || "");
-        row[COL.INTERVIEWEE - 1]           = String(r[OLD_COL.INTERVIEWEE - 1] || "");
-        row[COL.STATUS - 1]                = String(r[OLD_COL.STATUS - 1] || "");
-        row[COL.SECTIONS - 1]              = sections;
-        row[COL.TRANSCRIPT - 1]            = transcript;
-        row[COL.PROCESS_ERROR - 1]         = String(r[OLD_COL.PROCESS_ERROR - 1] || "");
-        row[COL.PROCESSING_STARTED_AT - 1] = r[OLD_COL.PROCESSING_STARTED_AT - 1];
-        return row;
-      });
-
-      const backupName = uniqueSheetName_(SHEET_RECORDS + "_旧");
-      old.setName(backupName);
-      const sheet = createRecordsSheet_(SHEET_RECORDS);
-      if (rows.length) sheet.getRange(HEADER_ROW + 1, 1, rows.length, NUM_COLS).setValues(rows);
-      ss.setActiveSheet(sheet);
-      ss.moveActiveSheet(1);
-      console.log("✓ records を新しい形に作り直しました（" + rows.length + "件）。元のシートは「" + backupName + "」として残しています");
-    }
-
-    OLD_SHEET_NAMES.forEach(name => {
-      const s = ss.getSheetByName(name);
-      if (s) {
-        ss.deleteSheet(s);
-        console.log("✓ 使っていない「" + name + "」シートを削除しました");
-      }
-    });
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-function uniqueSheetName_(base) {
-  let name = base;
-  for (let i = 2; SS().getSheetByName(name); i++) name = base + i;
-  return name;
 }
 
 // ================================================================
@@ -1017,7 +1121,7 @@ function listGeminiModels() {
 
 // 合言葉が設定されているかの確認（値そのものはログに出さない）
 function checkPasscodeSetting() {
-  const v = String(PropertiesService.getScriptProperties().getProperty("APP_PASSCODE") || "").trim();
+  const v = prop_("APP_PASSCODE").trim();
   if (!v) console.log("✗ APP_PASSCODE が未設定です。この状態ではアプリが使えません。");
   else console.log("✓ APP_PASSCODE は設定済みです（" + v.length + "文字）");
 }
