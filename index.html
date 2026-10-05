@@ -741,18 +741,9 @@ function LoginScreen({
       fontSize: 24,
       fontWeight: 700,
       color: C.text,
-      marginBottom: 8
+      marginBottom: 32
     }
-  }, "ボイスメモ要約"), /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 14,
-      color: C.text2,
-      marginBottom: 32,
-      textAlign: "center",
-      lineHeight: 1.7,
-      maxWidth: 300
-    }
-  }, "iPhoneのボイスメモの文字起こしを貼り付けるだけで、1on1や会議の要約を作成します"), notice && /*#__PURE__*/React.createElement("div", {
+  }, "ボイスメモ要約"), notice && /*#__PURE__*/React.createElement("div", {
     style: {
       width: "100%",
       maxWidth: 280,
@@ -771,14 +762,7 @@ function LoginScreen({
       maxWidth: 280,
       marginBottom: 20
     }
-  }, /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 12,
-      fontWeight: 600,
-      color: C.text2,
-      margin: "0 2px 6px"
-    }
-  }, "合言葉（社内で共有されているもの）"), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative"
     }
@@ -813,14 +797,7 @@ function LoginScreen({
       WebkitUserSelect: "text",
       userSelect: "text"
     }
-  })), /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 11,
-      color: C.text2,
-      margin: "6px 2px 0",
-      lineHeight: 1.6
-    }
-  }, "この端末で一度入力すれば、次からは不要です。")), lastName && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+  }))), lastName && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
     onClick: () => doLogin(lastName),
     disabled: checking,
     style: {
@@ -937,34 +914,22 @@ function LoginScreen({
       cursor: name.trim() ? "pointer" : "default",
       marginTop: 4
     }
-  }, "開始"), /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 11,
-      color: C.text2,
-      marginTop: 24,
-      textAlign: "center",
-      lineHeight: 1.8,
-      maxWidth: 280
-    }
-  }, "履歴はお名前ごとに保存されます。毎回同じお名前で入力してください（空白は自動で取り除きます）。", /*#__PURE__*/React.createElement("br", null), "この端末では30日間ログインしたままになります。"));
+  }, "開始"));
 }
 
 // ── DRAWER ───────────────────────────────────────────────
 const DRAWER_ITEMS = [{
   key: "home",
   icon: "house",
-  label: "ホーム",
-  desc: "文字起こしを貼って要約"
+  label: "ホーム"
 }, {
   key: "history",
   icon: "clock-rotate-left",
-  label: "履歴",
-  desc: "過去の要約を見る・探す"
+  label: "履歴"
 }, {
   key: "help",
   icon: "circle-question",
-  label: "使い方",
-  desc: "操作の手順と注意点"
+  label: "使い方"
 }];
 // 画面がおかしい時用。新しいサービスワーカーの確認をしてから読み込み直す
 // （画面本体はネットワーク優先なので、これで最新版が表示される）。
@@ -1112,13 +1077,7 @@ function Drawer({
       fontWeight: item.key === current ? 600 : 500,
       color: item.key === current ? C.blue : C.text
     }
-  }, item.label), /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 12,
-      color: C.text2,
-      marginTop: 1
-    }
-  }, item.desc))))), /*#__PURE__*/React.createElement("div", {
+  }, item.label))))), /*#__PURE__*/React.createElement("div", {
     style: {
       padding: "12px 16px",
       paddingBottom: "max(16px, env(safe-area-inset-bottom, 16px))",
@@ -1148,12 +1107,7 @@ function Drawer({
       fontSize: 14,
       color: C.text
     }
-  }, "最新版に更新"), /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 11,
-      color: C.text2
-    }
-  }, "表示がおかしい時に"))), confirmLogout ? /*#__PURE__*/React.createElement("div", {
+  }, "最新版に更新"))), confirmLogout ? /*#__PURE__*/React.createElement("div", {
     style: {
       background: C.bg,
       borderRadius: 12,
@@ -1166,14 +1120,7 @@ function Drawer({
       color: C.text,
       marginBottom: 4
     }
-  }, "ログアウトしますか？"), /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 11,
-      color: C.text2,
-      lineHeight: 1.6,
-      marginBottom: 10
-    }
-  }, "次回はログイン画面の「", userName, " として開始」ですぐ戻れます。"), /*#__PURE__*/React.createElement("div", {
+  }, "ログアウトしますか？"), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 8
@@ -1226,12 +1173,7 @@ function Drawer({
       fontSize: 14,
       color: C.text
     }
-  }, "ログアウト"), /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 11,
-      color: C.text2
-    }
-  }, "別の名前に切り替える時に"))))));
+  }, "ログアウト"))))));
 }
 
 // ── SUMMARY MODAL ─────────────────────────────────────────
@@ -1879,16 +1821,14 @@ function SubmitProgress({ rec, onOpen, onShowHistory, onClose }) {
       fontWeight: 600,
       lineHeight: 1.5
     }
-  }, done ? "要約ができました" : failed ? "要約できませんでした" : "受け付けました。AIが要約しています…"), /*#__PURE__*/React.createElement("p", {
+  }, done ? "要約ができました" : failed ? "要約できませんでした" : "受け付けました。要約しています…"), failed && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
-      color: failed ? C.red : C.text2,
+      color: C.red,
       lineHeight: 1.6,
-      marginTop: 2,
-      overflow: "hidden",
-      textOverflow: "ellipsis"
+      marginTop: 2
     }
-  }, done ? (rec.interviewee ? rec.interviewee + "との" : "") + (rec.sections?.meetingType === "group" ? "会議" : "面談") + "の要約を、履歴に保存しました。" : failed ? rec.processError || "時間をおいて、履歴から再試行してください。" : "アプリを閉じても、要約は自動で保存されます。"), done && actionBtn("要約を見る", onOpen), failed && actionBtn("履歴で再試行", onShowHistory)), (done || failed) && /*#__PURE__*/React.createElement("button", {
+  }, rec.processError || "時間をおいて再試行してください。"), done && actionBtn("要約を見る", onOpen), failed && actionBtn("履歴で再試行", onShowHistory)), (done || failed) && /*#__PURE__*/React.createElement("button", {
     onClick: onClose,
     "aria-label": "案内を閉じる",
     style: {
@@ -1906,7 +1846,7 @@ function SubmitProgress({ rec, onOpen, onShowHistory, onClose }) {
 // ホームは別の画面に移っても消さずに残す（active=false の間は隠すだけ）。以前は画面を
 // 移ると、貼り付けた本文・送信中の状態・進み具合の案内が消え、送信の失敗にも気づけず、
 // 送り直すと記録が2件になることがあった。
-function HomeScreen({ member, active, onShowHelp, onShowHistory }) {
+function HomeScreen({ member, active, onShowHistory }) {
   const [selectedRec, setSelectedRec] = useState(null);
   const [delTarget, setDelTarget] = useState(null);
   // 端末に保存した前回の履歴があれば、それをすぐ出しておく（裏で最新に差し替える）
@@ -1924,6 +1864,10 @@ function HomeScreen({ member, active, onShowHelp, onShowHistory }) {
   const [interviewee, setInterviewee] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [slowSending, setSlowSending] = useState(false);
+  // 貼り付けボタンが使えなかったとき、手で貼り付ける欄を出す
+  const [manualMode, setManualMode] = useState(false);
+  // 相手の名前の候補は、名前の欄を押している間だけ出す
+  const [nameFocused, setNameFocused] = useState(false);
   const [error, setError] = useState(null);
   // 直前に受け付けた記録。ホーム上部の案内を、その記録の進み具合（要約中→完了／失敗）に合わせて切り替える
   const [noticeId, setNoticeId] = useState(null);
@@ -1984,14 +1928,16 @@ function HomeScreen({ member, active, onShowHelp, onShowHistory }) {
     try {
       const text = await navigator.clipboard.readText();
       if (!text || !text.trim()) {
-        setError("クリップボードが空です。ボイスメモで録音を開き、「文字起こしを表示」してから「文字起こしをコピー」をしてください。");
+        setError("クリップボードが空です。ボイスメモで「文字起こしを表示」→「文字起こしをコピー」をしてください。");
         return;
       }
       setTranscript(text);
       setNoticeId(null);
       setError(null);
     } catch {
-      setError("貼り付けできませんでした。下の欄を長押しして「ペースト」を選んでください。");
+      // 貼り付けを許可されなかった場合などは、手で貼り付ける欄に切り替える
+      setManualMode(true);
+      setError("貼り付けできませんでした。欄を長押しして「ペースト」を選んでください。");
     }
   };
   const handleSubmit = async () => {
@@ -2092,9 +2038,33 @@ function HomeScreen({ member, active, onShowHelp, onShowHistory }) {
     }, ...prev.filter(r => r.id !== accepted.id)].slice(0, HOME_RECENT_COUNT));
     if (typedName) setNameCandidates(prev => uniqueNames([typedName, ...prev]));
     setTranscript("");
+    setManualMode(false);
     setInterviewee("");
     setSubmitting(false);
     setNoticeId(accepted.id);
+  };
+  // 画面は「貼り付け前」と「貼り付け後」で切り替える。貼り付け前は大きな貼り付け枠だけ、
+  // 貼り付け後に本文・相手・［要約する］を出す（同じ強さのボタンや欄が並んで迷わないように）。
+  const showEditor = !!trimmed || manualMode || !canReadClipboard;
+  const lastRec = recentRecs[0];
+  const showLast = lastRec && !noticeRec && !showEditor;
+  const label = {
+    fontSize: 13,
+    fontWeight: 600,
+    color: C.text2
+  };
+  const field = {
+    width: "100%",
+    background: C.bg,
+    color: C.text,
+    border: `1.5px solid ${C.sep}`,
+    borderRadius: 12,
+    padding: "11px 13px",
+    // iOS Safariは16px未満の入力欄にフォーカスすると画面を拡大してしまうため16pxにする
+    fontSize: 16,
+    outline: "none",
+    WebkitUserSelect: "text",
+    userSelect: "text"
   };
   return /*#__PURE__*/React.createElement("div", {
     style: {
@@ -2112,50 +2082,20 @@ function HomeScreen({ member, active, onShowHelp, onShowHistory }) {
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      padding: "12px 16px",
+      padding: "20px 16px 16px",
       display: "flex",
       flexDirection: "column",
       minHeight: "100%"
     }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      background: C.surface,
-      borderRadius: 14,
-      border: `1px solid ${C.sep}`,
-      padding: "16px",
-      marginBottom: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      justifyContent: "flex-end",
-      marginBottom: 8
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: onShowHelp,
-    style: {
-      display: "flex",
-      alignItems: "center",
-      gap: 4,
-      fontSize: 12,
-      color: C.text2,
-      background: "none",
-      border: "none",
-      cursor: "pointer",
-      padding: 2
-    }
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: "circle-question",
-    size: 12,
-    color: C.text2
-  }), "使い方")), error && /*#__PURE__*/React.createElement("div", {
+  }, error && /*#__PURE__*/React.createElement("div", {
     style: {
       background: `${C.red}12`,
       border: `1px solid ${C.red}25`,
       borderRadius: 10,
       padding: "9px 11px",
-      marginBottom: 10,
-      fontSize: 12,
+      marginBottom: 12,
+      fontSize: 13,
+      lineHeight: 1.6,
       color: C.red
     }
   }, error), noticeRec && /*#__PURE__*/React.createElement(SubmitProgress, {
@@ -2163,117 +2103,112 @@ function HomeScreen({ member, active, onShowHelp, onShowHistory }) {
     onOpen: () => setSelectedRec(noticeRec),
     onShowHistory: onShowHistory,
     onClose: () => setNoticeId(null)
-  }), canReadClipboard && !trimmed && /*#__PURE__*/React.createElement("button", {
+  }), !showEditor ? /*#__PURE__*/React.createElement("button", {
+    // 貼り付け前：画面の主役はこの枠ひとつ
     onClick: pasteFromClipboard,
-    disabled: submitting,
     style: {
       width: "100%",
-      padding: "13px",
-      marginBottom: 8,
-      background: C.blue,
-      color: "#fff",
-      border: "none",
-      borderRadius: 10,
-      fontSize: 15,
-      fontWeight: 600,
+      marginTop: noticeRec ? 4 : 8,
+      padding: "40px 16px",
+      borderRadius: 16,
+      border: `2px dashed ${C.blue}66`,
+      background: `${C.blue}0D`,
+      color: C.blue,
       display: "flex",
+      flexDirection: "column",
       alignItems: "center",
-      justifyContent: "center",
-      gap: 7,
+      gap: 10,
       cursor: "pointer"
     }
   }, /*#__PURE__*/React.createElement(Ic, {
     n: "clipboard",
-    size: 15,
-    color: "#fff"
-  }), "クリップボードから貼り付け"), /*#__PURE__*/React.createElement("textarea", {
+    size: 30,
+    color: C.blue
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 17,
+      fontWeight: 600
+    }
+  }, "タップして貼り付け")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "baseline",
+      justifyContent: "space-between",
+      margin: "0 2px 6px"
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    style: label
+  }, "文字起こし"), trimmed && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: tooLong ? C.red : C.text2
+    }
+  }, trimmed.length.toLocaleString(), "文字")), /*#__PURE__*/React.createElement("textarea", {
     value: transcript,
     onChange: e => {
       setTranscript(e.target.value);
       setNoticeId(null);
     },
-    placeholder: canReadClipboard ? "または、ここに直接貼り付け" : "ここに文字起こしを貼り付け",
-    rows: trimmed ? 8 : 3,
+    placeholder: "ここに貼り付け",
+    rows: trimmed ? 6 : 4,
     style: {
-      width: "100%",
-      background: C.bg,
-      color: C.text,
+      ...field,
       border: `1.5px solid ${tooLong ? C.red : C.sep}`,
-      borderRadius: 10,
-      padding: "11px 13px",
-      // iOS Safariは16px未満の入力欄にフォーカスすると画面を拡大してしまうため16pxにする
-      fontSize: 16,
       lineHeight: 1.6,
-      outline: "none",
-      resize: "vertical",
-      WebkitUserSelect: "text",
-      userSelect: "text"
+      resize: "vertical"
     }
-  }), /*#__PURE__*/React.createElement("div", {
+  }), tooLong && /*#__PURE__*/React.createElement("p", {
     style: {
-      display: "flex",
-      alignItems: "flex-start",
-      gap: 8,
-      margin: "4px 2px 10px"
+      fontSize: 12,
+      color: C.red,
+      margin: "4px 2px 0"
     }
-  }, transcript && !submitting && /*#__PURE__*/React.createElement("button", {
+  }, "上限（", MAX_TRANSCRIPT_CHARS.toLocaleString(), "文字）を超えています。録音を分けてください"), canReadClipboard && !submitting && /*#__PURE__*/React.createElement("button", {
     onClick: () => {
       setTranscript("");
+      setManualMode(false);
       setError(null);
     },
     style: {
-      display: "flex",
-      alignItems: "center",
-      gap: 4,
-      fontSize: 12,
+      alignSelf: "flex-end",
+      marginTop: 6,
+      fontSize: 13,
       color: C.text2,
       background: "none",
       border: "none",
       cursor: "pointer",
-      padding: 0,
-      flexShrink: 0
+      padding: "2px"
     }
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: "xmark",
-    size: 11,
-    color: C.text2
-  }), "クリア"), /*#__PURE__*/React.createElement("p", {
+  }, "やり直す"), /*#__PURE__*/React.createElement("p", {
     style: {
-      fontSize: 11,
-      color: tooLong ? C.red : C.text2,
-      textAlign: "right",
-      marginLeft: "auto"
+      ...label,
+      margin: "14px 2px 6px"
     }
-  }, tooLong ? `${trimmed.length.toLocaleString()}文字（上限${MAX_TRANSCRIPT_CHARS.toLocaleString()}文字を超えています。録音を分けてください）` : `${trimmed.length.toLocaleString()}文字`)), /*#__PURE__*/React.createElement("input", {
+  }, "相手・参加者"), /*#__PURE__*/React.createElement("input", {
     type: "text",
     value: interviewee,
     onChange: e => setInterviewee(e.target.value),
-    placeholder: "相手・参加者（任意）",
-    style: {
-      width: "100%",
-      background: C.bg,
-      color: C.text,
-      border: `1.5px solid ${C.sep}`,
-      borderRadius: 10,
-      padding: "11px 13px",
-      fontSize: 16,
-      outline: "none",
-      marginBottom: candidates.length ? 8 : 10,
-      WebkitUserSelect: "text",
-      userSelect: "text"
-    }
-  }), candidates.length > 0 && /*#__PURE__*/React.createElement("div", {
+    onFocus: () => setNameFocused(true),
+    // 候補を押す前に消えないよう、少し待ってから閉じる
+    onBlur: () => setTimeout(() => setNameFocused(false), 200),
+    placeholder: "任意",
+    style: field
+  }), nameFocused && candidates.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       flexWrap: "wrap",
       gap: 6,
-      marginBottom: 12
+      marginTop: 8
     }
   }, candidates.map(n => /*#__PURE__*/React.createElement("button", {
     key: n,
-    onClick: () => setInterviewee(n),
+    onMouseDown: e => e.preventDefault(),
+    onClick: () => {
+      setInterviewee(n);
+      setNameFocused(false);
+    },
     style: {
-      padding: "5px 11px",
+      padding: "6px 12px",
       borderRadius: 14,
       fontSize: 13,
       background: C.bg,
@@ -2286,146 +2221,83 @@ function HomeScreen({ member, active, onShowHelp, onShowHistory }) {
     disabled: !canSubmit,
     style: {
       width: "100%",
-      padding: "11px",
-      background: canSubmit ? C.blue : `${C.blue}60`,
+      marginTop: 18,
+      padding: "14px",
+      background: canSubmit || submitting ? C.blue : `${C.blue}60`,
       color: "#fff",
       border: "none",
-      borderRadius: 10,
-      fontSize: 14,
+      borderRadius: 12,
+      fontSize: 16,
       fontWeight: 600,
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
-      gap: 7,
+      gap: 8,
       cursor: canSubmit ? "pointer" : "default"
     }
   }, submitting ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Ic, {
     n: "spinner",
-    size: 14,
+    size: 15,
     color: "#fff",
     cls: "spin"
   }), "送信中...") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Ic, {
     n: "wand-magic-sparkles",
-    size: 14,
+    size: 15,
     color: "#fff"
   }), "要約する")), submitting && slowSending && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       color: C.text2,
-      lineHeight: 1.6,
       marginTop: 8,
       textAlign: "center"
     }
-  }, "Googleのサーバーが混み合っていて、返事に時間がかかっています。このままお待ちください（数分かかることがあります）。")), recentRecs.length > 0 ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }, "混み合っています。そのままお待ちください")), showLast && /*#__PURE__*/React.createElement("button", {
+    // 最近の記録は「前回」の1件だけ（ほかは履歴から）
+    onClick: () => setSelectedRec(lastRec),
     style: {
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
-      margin: "0 2px 8px"
-    }
-  }, /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 12,
-      fontWeight: 600,
-      color: C.text2
-    }
-  }, "最近の記録"), /*#__PURE__*/React.createElement("button", {
-    onClick: onShowHistory,
-    style: {
-      display: "flex",
-      alignItems: "center",
-      gap: 3,
-      fontSize: 12,
-      color: C.blue,
-      background: "none",
-      border: "none",
+      marginTop: "auto",
+      width: "100%",
+      background: C.surface,
+      borderRadius: 12,
+      padding: "12px 14px",
+      border: `1px solid ${C.sep}`,
+      textAlign: "left",
       cursor: "pointer",
-      padding: 0
-    }
-  }, "すべて見る", /*#__PURE__*/React.createElement(Ic, {
-    n: "chevron-right",
-    size: 10,
-    color: C.blue
-  }))), recentRecs.map(rec => {
-    const isError = rec.status === "error";
-    const isPending = ["queued", "processing"].includes(rec.status);
-    return /*#__PURE__*/React.createElement("button", {
-      key: rec.id,
-      onClick: () => setSelectedRec(rec),
-      style: {
-        width: "100%",
-        background: C.surface,
-        borderRadius: 12,
-        padding: "11px 13px",
-        marginBottom: 8,
-        border: `1px solid ${C.sep}`,
-        textAlign: "left",
-        cursor: "pointer",
-        display: "flex",
-        alignItems: "center",
-        gap: 10,
-        boxShadow: "0 1px 3px rgba(0,0,0,.04)"
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        flex: 1,
-        minWidth: 0
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: "flex",
-        alignItems: "center",
-        gap: 6,
-        marginBottom: 3
-      }
-    }, /*#__PURE__*/React.createElement(TypeBadge, {
-      type: rec.sections?.meetingType
-    }), /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 14,
-        fontWeight: 600,
-        color: rec.interviewee ? C.text : C.text2,
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
-        minWidth: 0
-      }
-    }, rec.interviewee || "相手未入力"), /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 11,
-        color: C.text2,
-        marginLeft: "auto",
-        flexShrink: 0
-      }
-    }, relDate(rec.date))), /*#__PURE__*/React.createElement("p", {
-      style: {
-        fontSize: 12,
-        color: isError ? C.red : C.text2,
-        whiteSpace: "nowrap",
-        overflow: "hidden",
-        textOverflow: "ellipsis"
-      }
-    }, isError ? "処理に失敗しました（履歴から再試行できます）" : isPending ? "AI処理中..." : rec.sections?.sections?.[0]?.items?.[0] || "")), /*#__PURE__*/React.createElement(Ic, {
-      n: "chevron-right",
-      size: 12,
-      color: C.text2,
-      style: {
-        flexShrink: 0
-      }
-    }));
-  })) : /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1,
       display: "flex",
       alignItems: "center",
-      justifyContent: "center"
+      gap: 8
     }
-  }, /*#__PURE__*/React.createElement("p", {
+  }, /*#__PURE__*/React.createElement("span", {
     style: {
+      fontSize: 12,
       color: C.text2,
-      fontSize: 14
+      flexShrink: 0
     }
-  }, "まだ記録がありません")))), selectedRec && /*#__PURE__*/React.createElement(SummaryModal, {
+  }, "前回"), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 14,
+      fontWeight: 600,
+      color: C.text,
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
+      minWidth: 0
+    }
+  }, lastRec.interviewee || (lastRec.sections?.meetingType === "group" ? "会議" : "面談")), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: lastRec.status === "error" ? C.red : C.text2,
+      marginLeft: "auto",
+      flexShrink: 0
+    }
+  }, lastRec.status === "error" ? "失敗" : ["queued", "processing"].includes(lastRec.status) ? "要約中" : relDate(lastRec.date)), /*#__PURE__*/React.createElement(Ic, {
+    n: "chevron-right",
+    size: 12,
+    color: C.text2,
+    style: {
+      flexShrink: 0
+    }
+  })))), selectedRec &&/*#__PURE__*/React.createElement(SummaryModal, {
     // 開いている間に処理が終わったら表示を切り替えられるよう、一覧の最新の状態を渡す
     item: recentRecs.find(r => r.id === selectedRec.id) || selectedRec,
     onClose: () => setSelectedRec(null),
@@ -2467,7 +2339,7 @@ const HELP_STEPS = [{
   note: "録音の一覧から直接「文字起こしをコピー」すると、うまくコピーされないことがあります。"
 }, {
   title: "貼り付けて要約する",
-  body: "ホーム画面の「クリップボードから貼り付け」を押し、相手・参加者を入れて（以前入れた名前は候補から選べます）「要約する」を押します。「受け付けました」と出たら、アプリを閉じても大丈夫です。開いたままなら、要約が終わると「要約ができました」と表示され、［要約を見る］から確認できます（通常は数秒〜十数秒。混み合っている時はもう少しかかります）。"
+  body: "ホーム画面の「タップして貼り付け」を押し、相手・参加者を入れて（欄を押すと以前の名前が候補に出ます）「要約する」を押します。「受け付けました」と出たら、アプリを閉じても大丈夫です。開いたままなら、要約が終わると「要約ができました」と表示され、［要約を見る］から確認できます（通常は数秒〜十数秒。混み合っている時はもう少しかかります）。"
 }, {
   title: "見返す",
   body: "要約は「履歴」に保存されます。1on1／会議の切り替えや、キーワード・相手の名前で探せます。要約画面の右上「コピー」で他のアプリに貼り付けられ、「編集」で内容を直せます。削除は要約画面のいちばん下からできます。"
@@ -2492,7 +2364,7 @@ const HELP_ANALYSIS = [{
 }];
 const HELP_FAQ = [{
   q: "貼り付けできない／「クリップボードが空です」と出る",
-  a: "ボイスメモで録音を開き、「文字起こしを表示」してから「文字起こしをコピー」をしてください。それでも入らない場合は、ホーム画面の入力欄を長押しして「ペースト」を選んでください。"
+  a: "ボイスメモで録音を開き、「文字起こしを表示」してから「文字起こしをコピー」をしてください。それでも入らない場合は、表示される欄を長押しして「ペースト」を選んでください。"
 }, {
   q: "「AI処理中」のまま終わらない",
   a: "混み合っていると数分かかることがあります。終わり次第、ホーム画面と履歴に自動で反映されます。10分以上たっても変わらない場合は、履歴画面右上の更新ボタンを押してください。"
@@ -3426,7 +3298,7 @@ function HistoryScreen({
 function App() {
   // 合言葉を導入する前からログインしていた端末は、合言葉を入れてもらうまでログイン画面にする
   const [authed, setAuthed] = useState(() => lsGetAuth() && !!lsGetKey());
-  const [loginNotice, setLoginNotice] = useState(() => lsGetAuth() && !lsGetKey() ? "記録を守るため、合言葉が必要になりました。社内で共有されている合言葉を入力してください。" : "");
+  const [loginNotice, setLoginNotice] = useState(() => lsGetAuth() && !lsGetKey() ? "合言葉を入力してください" : "");
   const [currentUser, setCurrentUser] = useState(() => lsGetUser());
   const authedRef = useRef(authed);
   authedRef.current = authed;
@@ -3434,7 +3306,7 @@ function App() {
   useEffect(() => {
     const onAuthError = () => {
       if (!authedRef.current) return;
-      setLoginNotice("合言葉が変更されたため、もう一度入力してください。");
+      setLoginNotice("合言葉が変わりました。もう一度入力してください");
       setAuthed(false);
       setDrawerOpen(false);
     };
@@ -3653,7 +3525,6 @@ function App() {
   }, /*#__PURE__*/React.createElement(HomeScreen, {
     member: member,
     active: screen === "home",
-    onShowHelp: () => setScreen("help"),
     onShowHistory: () => setScreen("history")
   })), screen === "help" ? /*#__PURE__*/React.createElement(HelpScreen, null) : screen === "history" ? /*#__PURE__*/React.createElement(HistoryScreen, {
     memberFilter: currentUser?.name || ""
