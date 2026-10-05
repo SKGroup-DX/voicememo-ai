@@ -1386,12 +1386,13 @@ function HomeScreen({ member }) {
     try {
       // GAS側はその場で要約を試み、無料枠の混雑などで間に合わなかった場合だけ
       // "queued"を返して定期実行に回す（その場合は状態確認で完了を待つ）。
+      // GAS側はGeminiの混雑時に最大3回まで再試行するため、待ち上限は90秒にしている
       const data = await gasPost({
         action: "summarizeText",
         member,
         interviewee,
         transcript: trimmed
-      }, 60000);
+      }, 90000);
       if (!data.success) throw new Error(data.error || "GASエラー");
       const rec = {
         id: data.id,
