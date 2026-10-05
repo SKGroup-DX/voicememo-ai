@@ -867,6 +867,7 @@ function SummaryModal({
 }) {
   const [collapsed, setCollapsed] = useState(new Set());
   const [editing, setEditing] = useState(false);
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [draft, setDraft] = useState(null);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
@@ -908,7 +909,9 @@ function SummaryModal({
     const t = `${item.member}${item.interviewee ? " → " + item.interviewee : ""}`;
     const kind = item.sections?.meetingType === "group" ? "会議記録" : "面談記録";
     const dur = safeDur(item.duration);
-    let lines = [`【${kind}】${t}`, `日時：${item.date}${dur ? "　時間：" + dur : ""}`, ""];
+    const d = parseRecDate(item.date);
+    const when = d ? `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")} ${hhmm(d)}` : String(item.date || "");
+    let lines = [`【${kind}】${t}`, `日時：${when}${dur ? "　時間：" + dur : ""}`, ""];
     secs.forEach(s => {
       lines.push(`${s.emoji} ${s.label}`);
       (s.items || []).forEach(i => lines.push(`  ・${i}`));
@@ -963,44 +966,65 @@ function SummaryModal({
     style: {
       display: "flex",
       alignItems: "center",
-      justifyContent: "space-between",
-      padding: "12px 18px 8px"
+      gap: 8,
+      padding: "12px 18px 10px"
     }
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       alignItems: "center",
-      gap: 6,
-      flexWrap: "wrap",
+      gap: 7,
       marginBottom: 3
     }
-  }, /*#__PURE__*/React.createElement("span", {
+  }, /*#__PURE__*/React.createElement(TypeBadge, {
+    type: item.sections?.meetingType
+  }), /*#__PURE__*/React.createElement("span", {
     style: {
-      fontSize: 16,
+      fontSize: 17,
       fontWeight: 700,
-      color: C.text
+      color: item.interviewee ? C.text : C.text2,
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
+      minWidth: 0
     }
-  }, item.member), item.interviewee && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 14,
-      color: C.text2
-    }
-  }, "→"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 14,
-      fontWeight: 600,
-      color: C.purple
-    }
-  }, item.interviewee))), /*#__PURE__*/React.createElement("p", {
+  }, item.interviewee || "相手未入力")), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 11,
       color: C.text2
     }
-  }, relDate(item.date), safeDur(item.duration) ? " · " + safeDur(item.duration) : "")), /*#__PURE__*/React.createElement("button", {
+  }, relDate(item.date), safeDur(item.duration) ? " · " + safeDur(item.duration) : "")), secs.length > 0 && !editing && /*#__PURE__*/React.createElement("button", {
+    onClick: doCopy,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 5,
+      height: 32,
+      padding: "0 12px",
+      borderRadius: 16,
+      background: `${C.green}14`,
+      color: C.green,
+      fontSize: 13,
+      fontWeight: 600,
+      border: "none",
+      cursor: "pointer",
+      flexShrink: 0
+    }
+  }, /*#__PURE__*/React.createElement(Ic, {
+    n: msg === "コピーしました" ? "check" : "clipboard",
+    size: 13,
+    color: C.green
+  }), msg === "コピーしました" ? "コピー済み" : "コピー"), /*#__PURE__*/React.createElement("button", {
     onClick: onClose,
     style: {
       width: 32,
       height: 32,
+      flexShrink: 0,
       borderRadius: "50%",
       background: C.bg,
       border: "none",
@@ -1019,110 +1043,7 @@ function SummaryModal({
       padding: "0 18px 40px",
       flex: 1
     }
-  }, transcript && (() => {
-    const [open, setOpen] = useState(false);
-    return /*#__PURE__*/React.createElement("div", {
-      style: {
-        borderRadius: 10,
-        overflow: "hidden",
-        border: `1px solid ${C.sep}`,
-        marginBottom: 10
-      }
-    }, /*#__PURE__*/React.createElement("button", {
-      onClick: () => setOpen(o => !o),
-      style: {
-        width: "100%",
-        padding: "8px 12px",
-        background: C.bg,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        border: "none",
-        cursor: "pointer"
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: "flex",
-        alignItems: "center",
-        gap: 6
-      }
-    }, /*#__PURE__*/React.createElement(Ic, {
-      n: "file-lines",
-      size: 13,
-      color: C.blue
-    }), /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 13,
-        fontWeight: 600,
-        color: C.text
-      }
-    }, "文字起こし")), /*#__PURE__*/React.createElement(Ic, {
-      n: open ? "chevron-up" : "chevron-down",
-      size: 12,
-      color: C.text2
-    })), open && /*#__PURE__*/React.createElement("div", {
-      style: {
-        padding: "8px 12px 10px",
-        background: C.surface
-      }
-    }, /*#__PURE__*/React.createElement("p", {
-      style: {
-        fontSize: 13,
-        color: C.text2,
-        lineHeight: 1.75,
-        margin: 0
-      }
-    }, transcript)));
-  })(), analysis && /*#__PURE__*/React.createElement("div", {
-    style: {
-      borderRadius: 12,
-      border: `1px solid ${C.sep}`,
-      background: C.bg,
-      padding: "12px 14px",
-      marginBottom: 12
-    }
-  }, /*#__PURE__*/React.createElement("p", {
-    style: { fontSize: 12, fontWeight: 600, color: C.text2, marginBottom: 10 }
-  }, "\ud83d\udcca \u9762\u8ac7\u5206\u6790"),
-  // \u767a\u8a71\u5272\u5408\u30d0\u30fc
-  analysis.speakingRatio && /*#__PURE__*/React.createElement("div", { style: { marginBottom: 10 } },
-    /*#__PURE__*/React.createElement("div", {
-      style: { display: "flex", justifyContent: "space-between", fontSize: 11, color: C.text2, marginBottom: 4 }
-    },
-      /*#__PURE__*/React.createElement("span", null, `\u3042\u306a\u305f ${analysis.speakingRatio.self}%`),
-      /*#__PURE__*/React.createElement("span", null, `\u76f8\u624b ${analysis.speakingRatio.other}%`)
-    ),
-    /*#__PURE__*/React.createElement("div", {
-      style: { display: "flex", height: 8, borderRadius: 4, overflow: "hidden", background: C.sep }
-    },
-      /*#__PURE__*/React.createElement("div", { style: { width: `${analysis.speakingRatio.self}%`, background: C.blue } }),
-      /*#__PURE__*/React.createElement("div", { style: { width: `${analysis.speakingRatio.other}%`, background: C.purple } })
-    )
-  ),
-  // \u50be\u8074\u5ea6\u30b9\u30b3\u30a2
-  typeof analysis.listeningScore === "number" && /*#__PURE__*/React.createElement("div", {
-    style: { display: "flex", alignItems: "center", gap: 10, marginBottom: analysis.listeningComment ? 4 : 0 }
-  },
-    /*#__PURE__*/React.createElement("span", { style: { fontSize: 11, color: C.text2, flexShrink: 0 } }, "\u50be\u8074\u5ea6"),
-    /*#__PURE__*/React.createElement("div", {
-      style: { flex: 1, height: 6, borderRadius: 3, background: C.sep, overflow: "hidden" }
-    },
-      /*#__PURE__*/React.createElement("div", {
-        style: {
-          width: `${analysis.listeningScore}%`, height: "100%",
-          background: analysis.listeningScore >= 70 ? C.green : analysis.listeningScore >= 40 ? C.orange : C.red
-        }
-      })
-    ),
-    /*#__PURE__*/React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: C.text, flexShrink: 0 } }, `${analysis.listeningScore}`)
-  ),
-  analysis.listeningComment && /*#__PURE__*/React.createElement("p", {
-    style: { fontSize: 11, color: C.text2, marginTop: 2 }
-  }, analysis.listeningComment),
-  typeof analysis.openQuestionRatio === "number" && /*#__PURE__*/React.createElement("p", {
-    style: { fontSize: 11, color: C.text2, marginTop: 8 }
-  }, `\ud83d\udca1 \u30aa\u30fc\u30d7\u30f3\u8cea\u554f\u5272\u5408: ${analysis.openQuestionRatio}%`)
-  ), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       alignItems: "center",
@@ -1146,7 +1067,7 @@ function SummaryModal({
       fontSize: 11,
       color: msg.includes("失敗") ? C.red : C.green
     }
-  }, msg), item.id && !editing && /*#__PURE__*/React.createElement("button", {
+  }, msg !== "コピーしました" && msg), item.id && secs.length > 0 && !editing && /*#__PURE__*/React.createElement("button", {
     onClick: startEdit,
     style: {
       display: "flex",
@@ -1193,7 +1114,17 @@ function SummaryModal({
       border: "none",
       cursor: "pointer"
     }
-  }, saving ? "保存中..." : "保存")))), dispSecs.map((sec, si) => /*#__PURE__*/React.createElement("div", {
+  }, saving ? "保存中..." : "保存")))), !editing && secs.length === 0 && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 13,
+      lineHeight: 1.7,
+      color: item.status === "error" ? C.red : C.text2,
+      background: C.bg,
+      borderRadius: 10,
+      padding: "12px 14px",
+      marginBottom: 8
+    }
+  }, item.status === "error" ? "処理に失敗しました（履歴の再試行ボタンでやり直せます）: " + (item.processError || "不明なエラー") : "AI処理中です。完了すると要約が表示されます。"), dispSecs.map((sec, si) => /*#__PURE__*/React.createElement("div", {
     key: sec.key,
     style: {
       borderRadius: 10,
@@ -1277,69 +1208,108 @@ function SummaryModal({
       marginTop: 6,
       flexShrink: 0
     }
-  }), /*#__PURE__*/React.createElement("span", null, it)))))), /*#__PURE__*/React.createElement("div", {
+  }), /*#__PURE__*/React.createElement("span", null, it)))))), analysis && /*#__PURE__*/React.createElement("div", {
     style: {
-      borderTop: `1px solid ${C.sep}`,
-      marginTop: 10,
-      paddingTop: 14
+      borderRadius: 12,
+      border: `1px solid ${C.sep}`,
+      background: C.bg,
+      padding: "12px 14px",
+      margin: "14px 0 12px"
     }
   }, /*#__PURE__*/React.createElement("p", {
+    style: { fontSize: 12, fontWeight: 600, color: C.text2, marginBottom: 10 }
+  }, "\ud83d\udcca \u9762\u8ac7\u5206\u6790"),
+  // \u767a\u8a71\u5272\u5408\u30d0\u30fc
+  analysis.speakingRatio && /*#__PURE__*/React.createElement("div", { style: { marginBottom: 10 } },
+    /*#__PURE__*/React.createElement("div", {
+      style: { display: "flex", justifyContent: "space-between", fontSize: 11, color: C.text2, marginBottom: 4 }
+    },
+      /*#__PURE__*/React.createElement("span", null, `\u3042\u306a\u305f ${analysis.speakingRatio.self}%`),
+      /*#__PURE__*/React.createElement("span", null, `\u76f8\u624b ${analysis.speakingRatio.other}%`)
+    ),
+    /*#__PURE__*/React.createElement("div", {
+      style: { display: "flex", height: 8, borderRadius: 4, overflow: "hidden", background: C.sep }
+    },
+      /*#__PURE__*/React.createElement("div", { style: { width: `${analysis.speakingRatio.self}%`, background: C.blue } }),
+      /*#__PURE__*/React.createElement("div", { style: { width: `${analysis.speakingRatio.other}%`, background: C.purple } })
+    )
+  ),
+  // \u50be\u8074\u5ea6\u30b9\u30b3\u30a2
+  typeof analysis.listeningScore === "number" && /*#__PURE__*/React.createElement("div", {
+    style: { display: "flex", alignItems: "center", gap: 10, marginBottom: analysis.listeningComment ? 4 : 0 }
+  },
+    /*#__PURE__*/React.createElement("span", { style: { fontSize: 11, color: C.text2, flexShrink: 0 } }, "\u50be\u8074\u5ea6"),
+    /*#__PURE__*/React.createElement("div", {
+      style: { flex: 1, height: 6, borderRadius: 3, background: C.sep, overflow: "hidden" }
+    },
+      /*#__PURE__*/React.createElement("div", {
+        style: {
+          width: `${analysis.listeningScore}%`, height: "100%",
+          background: analysis.listeningScore >= 70 ? C.green : analysis.listeningScore >= 40 ? C.orange : C.red
+        }
+      })
+    ),
+    /*#__PURE__*/React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: C.text, flexShrink: 0 } }, `${analysis.listeningScore}`)
+  ),
+  analysis.listeningComment && /*#__PURE__*/React.createElement("p", {
+    style: { fontSize: 11, color: C.text2, marginTop: 2 }
+  }, analysis.listeningComment),
+  typeof analysis.openQuestionRatio === "number" && /*#__PURE__*/React.createElement("p", {
+    style: { fontSize: 11, color: C.text2, marginTop: 8 }
+  }, `\ud83d\udca1 \u30aa\u30fc\u30d7\u30f3\u8cea\u554f\u5272\u5408: ${analysis.openQuestionRatio}%`)
+  ), transcript && /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 12,
-      fontWeight: 600,
-      color: C.text2,
+      borderRadius: 10,
+      overflow: "hidden",
+      border: `1px solid ${C.sep}`,
       marginBottom: 10
     }
-  }, "エクスポート"), /*#__PURE__*/React.createElement("button", {
-    onClick: doCopy,
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setTranscriptOpen(o => !o),
     style: {
+      width: "100%",
+      padding: "8px 12px",
+      background: C.bg,
       display: "flex",
       alignItems: "center",
-      gap: 12,
-      width: "100%",
-      padding: "11px 13px",
-      background: C.bg,
-      border: `1px solid ${C.sep}`,
-      borderRadius: 12,
-      cursor: "pointer",
-      textAlign: "left"
+      justifyContent: "space-between",
+      border: "none",
+      cursor: "pointer"
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      width: 34,
-      height: 34,
-      borderRadius: 9,
-      background: `${C.green}12`,
       display: "flex",
       alignItems: "center",
-      justifyContent: "center",
-      flexShrink: 0
+      gap: 6
     }
   }, /*#__PURE__*/React.createElement(Ic, {
-    n: "clipboard",
-    size: 15,
-    color: C.green
-  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
+    n: "file-lines",
+    size: 13,
+    color: C.blue
+  }), /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 13,
       fontWeight: 600,
-      color: C.text,
-      marginBottom: 1
+      color: C.text
     }
-  }, "要約をコピー"), /*#__PURE__*/React.createElement("p", {
+  }, "文字起こし（元のテキスト）")), /*#__PURE__*/React.createElement(Ic, {
+    n: transcriptOpen ? "chevron-up" : "chevron-down",
+    size: 12,
+    color: C.text2
+  })), transcriptOpen && /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 11,
-      color: C.text2
+      padding: "8px 12px 10px",
+      background: C.surface
     }
-  }, "箇条書きのみ"))), msg && /*#__PURE__*/React.createElement("p", {
+  }, /*#__PURE__*/React.createElement("p", {
     style: {
-      fontSize: 12,
-      fontWeight: 600,
-      color: msg.includes("失敗") ? C.red : C.green,
-      textAlign: "center",
-      marginTop: 10
+      fontSize: 13,
+      color: C.text2,
+      lineHeight: 1.75,
+      margin: 0,
+      whiteSpace: "pre-wrap"
     }
-  }, msg), onDelete && !editing && /*#__PURE__*/React.createElement("button", {
+  }, transcript))), onDelete && !editing && /*#__PURE__*/React.createElement("button", {
     onClick: () => onDelete(item),
     style: {
       display: "flex",
@@ -1360,7 +1330,7 @@ function SummaryModal({
     n: "trash",
     size: 13,
     color: C.red
-  }), "この記録を削除")))));
+  }), "この記録を削除"))));
 }
 
 // ── HOME SCREEN ───────────────────────────────────────────
