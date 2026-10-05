@@ -1370,7 +1370,7 @@ function HomeScreen({ member }) {
     try {
       const text = await navigator.clipboard.readText();
       if (!text || !text.trim()) {
-        setError("クリップボードが空です。ボイスメモで文字起こしをコピーしてから押してください。");
+        setError("クリップボードが空です。ボイスメモで録音を開き、「文字起こしを表示」してから「文字起こしをコピー」をしてください。");
         return;
       }
       setTranscript(text);
@@ -1448,9 +1448,10 @@ function HomeScreen({ member }) {
       fontSize: 13,
       color: C.text2,
       lineHeight: 1.7,
-      marginBottom: 12
+      marginBottom: 12,
+      whiteSpace: "pre-line"
     }
-  }, "iPhone純正の「ボイスメモ」アプリで録音したら、その録音の文字起こしを開いてコピーし、下の欄に貼り付けてください。"), error && /*#__PURE__*/React.createElement("div", {
+  }, "1. iPhone純正の「ボイスメモ」で録音する\n2. 録音を開いて「文字起こしを表示」→「文字起こしをコピー」\n　※一覧から直接コピーすると、うまくコピーされないことがあります\n3. 下のボタンで貼り付けて「要約する」"), error && /*#__PURE__*/React.createElement("div", {
     style: {
       background: `${C.red}12`,
       border: `1px solid ${C.red}25`,
