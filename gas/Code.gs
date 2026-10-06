@@ -664,7 +664,7 @@ const FAST_CONFIG_ERROR_PATTERN = /thinking|response_?mime|mime_?type|generation
 function callGeminiSummarize(transcript, auth, policy) {
   const url = GEMINI_API_BASE + geminiModel() + ":generateContent";
 
-  const prompt = getDefaultSystemPrompt() + "\n\n【文字起こし内容】\n" + transcript;
+  const prompt = getDefaultSystemPrompt(transcript.length) + "\n\n【文字起こし内容】\n" + transcript;
   const baseConfig = { temperature: 0.3, maxOutputTokens: 32768 };
   const buildPayload = config => ({
     contents: [{ parts: [{ text: prompt }] }],
@@ -760,7 +760,7 @@ function normalizeSummary_(raw) {
 // 出し分けさせる。「発言比率・傾聴スコア」等の分析は1on1向けの指標なので、
 // 複数人会議と判定された場合はanalysisキー自体を出力させない
 // （アプリ側は analysis が無ければ単に表示しないだけなので、これだけで両対応できる）。
-function getDefaultSystemPrompt() {
+function getDefaultSystemPrompt(transcriptLength) {
   return `あなたは優秀な議事録・要約AIです。文字起こしを分析し、以下のステップに従ってください。
 
 【ステップ1：会議種別の自動判定】
@@ -793,7 +793,7 @@ function getDefaultSystemPrompt() {
   {"key":"pending","label":"保留事項・継続協議テーマ","emoji":"⏳","items":["..."]}
 ]
 
-【sections共通】各2〜4項目。情報がない場合は["特になし"]
+【sections共通】${itemCountRule_(transcriptLength)}情報がない場合は["特になし"]
 
 【analysis】（1on1の場合のみ）
 {
@@ -806,6 +806,15 @@ function getDefaultSystemPrompt() {
 - listeningScore: 相手の発言を受けて深掘りする質問ができているか、話を遮っていないか等から算出。
 - openQuestionRatio: 「はい/いいえ」で終わる質問ではなく、「なぜ」「どう思う」等の深掘りする質問の割合。
 - いずれも文字起こしのみからの推定であることを前提に、妥当な数値を出してください。`;
+}
+
+// 要約の各項目に入れる個数の目安。以前は長さに関係なく「各2〜4項目」だったため、
+// 1時間ほどの会議では決定事項やToDoが抜けやすかった。長い文字起こしほど多く書かせる。
+function itemCountRule_(transcriptLength) {
+  const n = Number(transcriptLength) || 0;
+  if (n >= 12000) return "各4〜7項目（重要なものから順に。決定事項と担当者ごとのToDoは漏れなく書く）。";
+  if (n >= 4000) return "各3〜5項目（重要なものから順に）。";
+  return "各2〜4項目。";
 }
 
 // Geminiの呼び出しはAPIキーではなく、スクリプト所有者のGoogleログイン権限
@@ -928,6 +937,63 @@ function reapStaleProcessing() {
 }
 
 // ================================================================
+// 古い文字起こしの自動削除（毎日の定期実行）
+// ================================================================
+// 1on1などの機密性に配慮し、一定日数（スクリプトプロパティ TRANSCRIPT_RETENTION_DAYS、
+// 未設定なら90日）を過ぎた記録は、文字起こしの本文だけを消して要約は残す。
+// 0 を設定すると消さない。要約待ち・失敗の記録は、やり直しに本文が要るので消さない。
+const DEFAULT_TRANSCRIPT_RETENTION_DAYS = 90;
+
+function transcriptRetentionDays_() {
+  const v = prop_("TRANSCRIPT_RETENTION_DAYS").trim();
+  if (v === "") return DEFAULT_TRANSCRIPT_RETENTION_DAYS;
+  const n = parseInt(v, 10);
+  return isFinite(n) && n >= 0 ? n : DEFAULT_TRANSCRIPT_RETENTION_DAYS;
+}
+
+function purgeOldTranscripts() {
+  const days = transcriptRetentionDays_();
+  if (!days) {
+    console.log("[purgeOldTranscripts] TRANSCRIPT_RETENTION_DAYS が0のため、消さずに終了");
+    return;
+  }
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  try {
+    withLock_(() => {
+      const sheet = recordsSheet();
+      const lastRow = sheet.getLastRow();
+      if (lastRow <= HEADER_ROW) return;
+      const n = lastRow - HEADER_ROW;
+      const dates = sheet.getRange(HEADER_ROW + 1, COL.DATE, n, 1).getValues();
+      const statuses = sheet.getRange(HEADER_ROW + 1, COL.STATUS, n, 1).getValues();
+      const transcripts = sheet.getRange(HEADER_ROW + 1, COL.TRANSCRIPT, n, 1).getValues();
+      let purged = 0;
+      for (let i = 0; i < n; i++) {
+        if (!transcripts[i][0] || String(statuses[i][0]) !== "done") continue;
+        const t = recordMillis_(dates[i][0]);
+        if (t && t < cutoff) {
+          // 消す行だけを書き換える（列全体を書き戻すと、先頭が - などの本文が数式扱いになるため）
+          sheet.getRange(HEADER_ROW + 1 + i, COL.TRANSCRIPT).setValue("");
+          purged++;
+        }
+      }
+      if (purged) console.log("[purgeOldTranscripts] " + days + "日より前の記録 " + purged + "件の文字起こしを消しました（要約は残しています）");
+    }, 30000);
+  } catch (e) {
+    console.warn("[purgeOldTranscripts] 今回は見送り（次回に再実行）:", e.message);
+  }
+}
+
+// 「日時」列の値（日付、または "yyyy-MM-dd HH:mm:ss" の文字）をミリ秒にする
+function recordMillis_(v) {
+  if (v instanceof Date) return v.getTime();
+  const s = String(v || "").trim();
+  if (!s) return 0;
+  const d = new Date(/^\d{4}-\d{2}-\d{2} \d/.test(s) ? s.replace(" ", "T") : s);
+  return isNaN(d.getTime()) ? 0 : d.getTime();
+}
+
+// ================================================================
 // ユーティリティ
 // ================================================================
 function SS() {
@@ -1042,6 +1108,7 @@ function rowToRecord(row) {
 // このプロジェクトの定期実行をすべて消してから、必要なものだけ作り直す。
 // ・runPendingJobs: 1分おき（受け付け済みで要約されていない記録を要約する）
 // ・warmup: 5分おき（応答を速く保つ＋止まった処理の拾い直し）
+// ・purgeOldTranscripts: 毎日3時ごろ（古い記録の文字起こしの本文を消す）
 // 何回実行しても同じ状態になる。Webアプリ経由で作ったトリガーは再デプロイで
 // 無効になることがあるため、必ずエディタから実行する。
 function setupTriggers() {
@@ -1054,7 +1121,8 @@ function setupTriggers() {
   });
   ScriptApp.newTrigger("runPendingJobs").timeBased().everyMinutes(1).create();
   ScriptApp.newTrigger("warmup").timeBased().everyMinutes(5).create();
-  console.log("[setupTriggers] 定期実行を設定しました: runPendingJobs（1分おき）, warmup（5分おき）");
+  ScriptApp.newTrigger("purgeOldTranscripts").timeBased().everyDays(1).atHour(3).create();
+  console.log("[setupTriggers] 定期実行を設定しました: runPendingJobs（1分おき）, warmup（5分おき）, purgeOldTranscripts（毎日3時ごろ）");
 }
 
 // ================================================================
