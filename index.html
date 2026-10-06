@@ -922,6 +922,26 @@ function Drawer({
   useEffect(() => {
     if (!open) setConfirmLogout(false);
   }, [open]);
+  // ほかの画面と同じく、灰色の背景にまとまりごとの白い枠を置く
+  const groupBox = {
+    background: C.surface,
+    borderRadius: 12,
+    border: `1px solid ${C.sep}`,
+    overflow: "hidden"
+  };
+  const row = (first, active) => ({
+    width: "100%",
+    minHeight: 50,
+    padding: "0 16px",
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    background: active ? `${C.blue}0F` : "none",
+    border: "none",
+    borderTop: first ? "none" : `1px solid ${C.sep}`,
+    cursor: "pointer",
+    textAlign: "left"
+  });
   return /*#__PURE__*/React.createElement(React.Fragment, null, open && /*#__PURE__*/React.createElement("div", {
     onClick: onClose,
     style: {
@@ -931,164 +951,79 @@ function Drawer({
       zIndex: 100
     }
   }), /*#__PURE__*/React.createElement("div", {
+    "aria-hidden": !open,
     style: {
       position: "absolute",
       top: 0,
       left: 0,
       bottom: 0,
-      width: 260,
-      background: C.surface,
+      width: 270,
+      background: C.bg,
       zIndex: 101,
       transform: open ? "translateX(0)" : "translateX(-100%)",
       transition: "transform .25s cubic-bezier(.32,1,.36,1)",
       display: "flex",
       flexDirection: "column",
+      padding: "max(52px, calc(env(safe-area-inset-top) + 16px)) 16px max(16px, env(safe-area-inset-bottom))",
       boxShadow: open ? "6px 0 24px rgba(0,0,0,.1)" : "none"
     }
-  }, /*#__PURE__*/React.createElement("div", {
+  }, userName && /*#__PURE__*/React.createElement("div", {
     style: {
-      padding: "52px 16px 16px",
-      borderBottom: `1px solid ${C.sep}`
+      padding: "0 4px 18px"
     }
   }, /*#__PURE__*/React.createElement("p", {
     style: {
-      fontSize: 20,
-      fontWeight: 700,
-      color: C.text,
-      margin: "0 4px 12px"
-    }
-  }, "ボイスメモ要約"), userName && /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      alignItems: "center",
-      gap: 10,
-      background: C.bg,
-      borderRadius: 12,
-      padding: "10px 12px"
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      width: 34,
-      height: 34,
-      borderRadius: "50%",
-      background: `${C.blue}18`,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      flexShrink: 0
-    }
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: "user",
-    size: 15,
-    color: C.blue
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      minWidth: 0
-    }
-  }, /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 11,
+      fontSize: 12,
       color: C.text2
     }
   }, "ログイン中"), /*#__PURE__*/React.createElement("p", {
     style: {
-      fontSize: 15,
-      fontWeight: 600,
+      fontSize: 22,
+      fontWeight: 700,
       color: C.text,
       overflow: "hidden",
       textOverflow: "ellipsis",
       whiteSpace: "nowrap"
     }
-  }, userName)))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1,
-      padding: "8px 0",
-      overflowY: "auto"
-    }
-  }, DRAWER_ITEMS.map(item => /*#__PURE__*/React.createElement("button", {
-    key: item.key,
-    onClick: () => {
-      onNav(item.key);
-      onClose();
-    },
-    style: {
-      width: "100%",
-      padding: "11px 20px",
-      display: "flex",
-      alignItems: "center",
-      gap: 14,
-      background: "none",
-      border: "none",
-      cursor: "pointer",
-      textAlign: "left"
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      width: 38,
-      height: 38,
-      borderRadius: 10,
-      background: item.key === current ? `${C.blue}15` : C.bg,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      flexShrink: 0
-    }
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: item.icon,
-    size: 17,
-    color: item.key === current ? C.blue : C.text2
+  }, userName)), /*#__PURE__*/React.createElement("div", {
+    style: groupBox
+  }, DRAWER_ITEMS.map((item, i) => {
+    const active = item.key === current;
+    return /*#__PURE__*/React.createElement("button", {
+      key: item.key,
+      "aria-current": active ? "page" : undefined,
+      onClick: () => {
+        onNav(item.key);
+        onClose();
+      },
+      style: row(i === 0, active)
+    }, /*#__PURE__*/React.createElement(Ic, {
+      n: item.icon,
+      size: 16,
+      color: active ? C.blue : C.text2
+    }), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 16,
+        fontWeight: active ? 600 : 400,
+        color: active ? C.blue : C.text
+      }
+    }, item.label));
   })), /*#__PURE__*/React.createElement("div", {
     style: {
-      minWidth: 0
+      flex: 1
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: groupBox
+  }, confirmLogout ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: "12px 14px"
     }
   }, /*#__PURE__*/React.createElement("p", {
     style: {
-      fontSize: 16,
-      fontWeight: item.key === current ? 600 : 500,
-      color: item.key === current ? C.blue : C.text
-    }
-  }, item.label))))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      padding: "12px 16px",
-      paddingBottom: "max(16px, env(safe-area-inset-bottom, 16px))",
-      borderTop: `1px solid ${C.sep}`
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: reloadLatest,
-    style: {
-      width: "100%",
-      padding: "11px 16px",
-      marginBottom: 8,
-      display: "flex",
-      alignItems: "center",
-      gap: 10,
-      background: "none",
-      border: `1px solid ${C.sep}`,
-      borderRadius: 12,
-      cursor: "pointer",
-      textAlign: "left"
-    }
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: "rotate-right",
-    size: 15,
-    color: C.text2
-  }), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 14,
-      color: C.text
-    }
-  }, "最新版に更新"))), confirmLogout ? /*#__PURE__*/React.createElement("div", {
-    style: {
-      background: C.bg,
-      borderRadius: 12,
-      padding: "12px"
-    }
-  }, /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 14,
+      fontSize: 15,
       fontWeight: 600,
       color: C.text,
-      marginBottom: 4
+      marginBottom: 10
     }
   }, "ログアウトしますか？"), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -1099,11 +1034,12 @@ function Drawer({
     onClick: () => setConfirmLogout(false),
     style: {
       flex: 1,
-      padding: "9px 0",
+      height: 40,
       borderRadius: 10,
-      background: C.surface,
-      border: `1px solid ${C.sep}`,
+      background: C.bg,
+      border: "none",
       fontSize: 14,
+      fontWeight: 600,
       color: C.text,
       cursor: "pointer"
     }
@@ -1111,7 +1047,7 @@ function Drawer({
     onClick: onLogout,
     style: {
       flex: 1,
-      padding: "9px 0",
+      height: 40,
       borderRadius: 10,
       background: C.red,
       border: "none",
@@ -1120,28 +1056,29 @@ function Drawer({
       color: "#fff",
       cursor: "pointer"
     }
-  }, "ログアウト"))) : /*#__PURE__*/React.createElement("button", {
-    onClick: () => setConfirmLogout(true),
+  }, "ログアウト"))) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+    onClick: reloadLatest,
+    style: row(true, false)
+  }, /*#__PURE__*/React.createElement(Ic, {
+    n: "rotate-right",
+    size: 15,
+    color: C.text2
+  }), /*#__PURE__*/React.createElement("span", {
     style: {
-      width: "100%",
-      padding: "11px 16px",
-      display: "flex",
-      alignItems: "center",
-      gap: 10,
-      background: C.bg,
-      border: "none",
-      borderRadius: 12,
-      cursor: "pointer",
-      textAlign: "left"
+      fontSize: 15,
+      color: C.text
     }
+  }, "最新版に更新")), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setConfirmLogout(true),
+    style: row(false, false)
   }, /*#__PURE__*/React.createElement(Ic, {
     n: "lock",
     size: 15,
-    color: C.text2
-  }), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
+    color: C.red
+  }), /*#__PURE__*/React.createElement("span", {
     style: {
-      fontSize: 14,
-      color: C.text
+      fontSize: 15,
+      color: C.red
     }
   }, "ログアウト"))))));
 }
