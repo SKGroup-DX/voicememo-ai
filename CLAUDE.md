@@ -30,7 +30,7 @@ URL: https://skgroup-dx.github.io/voicememo-ai/
 
 \- 日時はローカル時刻で組み立てる(UTCは使わない)
 
-\- フォントは IBM Plex Sans JP / Noto Sans JP
+\- フォントはiPhone標準（ヒラギノ）をそのまま使う。Webフォントは読み込まない（表示速度とオフライン動作を優先）
 
 \- このリポジトリは公開されている。合言葉・プロジェクトID・APIキー等の秘密はコードやこのファイルに書かず、GASのスクリプトプロパティ（APP_PASSCODE、GCP_PROJECT_ID）にだけ置く
 
