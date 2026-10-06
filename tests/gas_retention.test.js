@@ -15,8 +15,11 @@ const sheet = {
 };
 const props = { APP_PASSCODE: "k", GCP_PROJECT_ID: "p" };
 let sentPrompt = "";
+// 「計測」シートなど、records 以外のシート
+const extraSheets = {};
+const extraSheet = () => { const data = []; return { data, getLastRow: () => data.length, setFrozenRows() {}, getRange: (r, c, nr = 1, nc = 1) => { const rg = { setValues: v => { v.forEach((row, i) => { data[r - 1 + i] = row.slice(); }); return rg; }, setFontWeight: () => rg, setBackground: () => rg }; return rg; } }; };
 const ctx = {
-  SpreadsheetApp: { getActiveSpreadsheet: () => ({ getSheetByName: () => sheet, getName: () => "s" }), flush() {} },
+  SpreadsheetApp: { getActiveSpreadsheet: () => ({ getSheetByName: n => n === "records" ? sheet : (extraSheets[n] || null), insertSheet: n => (extraSheets[n] = extraSheet()), getName: () => "s" }), flush() {} },
   PropertiesService: { getScriptProperties: () => ({ getProperties: () => Object.assign({}, props), getProperty: k => props[k] ?? null, setProperty: (k, v) => { props[k] = v; } }) },
   CacheService: { getScriptCache: () => ({ get: () => null, put() {} }) },
   Utilities: { sleep() {}, getUuid: () => "x", formatDate: () => "2026-10-06 10:00:00" },

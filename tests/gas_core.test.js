@@ -19,8 +19,11 @@ let lockFree = true, tokenCalls = 0, script = [], calls = 0, slept = [], onFetch
 const ok200 = obj => ({ code: 200, body: JSON.stringify({ candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify(obj) }] } }] }) });
 const sum = t => ok200({ meetingType: "1on1", sections: [{ key: "goal", label: "今日のゴール", emoji: "🎯", items: [t] }] });
 const r429 = sec => ({ code: 429, body: JSON.stringify({ error: { code: 429, message: "Quota exceeded per minute", details: [{ "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: sec + "s" }] } }) });
+// 「計測」シートなど、records 以外のシート
+const extraSheets = {};
+const extraSheet = () => { const data = []; return { data, getLastRow: () => data.length, setFrozenRows() {}, getRange: (r, c, nr = 1, nc = 1) => { const rg = { setValues: v => { v.forEach((row, i) => { data[r - 1 + i] = row.slice(); }); return rg; }, setFontWeight: () => rg, setBackground: () => rg }; return rg; } }; };
 const ctx = {
-  SpreadsheetApp: { getActiveSpreadsheet: () => ({ getSheetByName: () => sheet, getName: () => "s" }), flush() {} },
+  SpreadsheetApp: { getActiveSpreadsheet: () => ({ getSheetByName: n => n === "records" ? sheet : (extraSheets[n] || null), insertSheet: n => (extraSheets[n] = extraSheet()), getName: () => "s" }), flush() {} },
   PropertiesService: { getScriptProperties: () => ({ getProperties: () => Object.assign({}, props), getProperty: k => props[k] ?? null, setProperty: (k, v) => { props[k] = v; } }) },
   CacheService: { getScriptCache: () => ({ get: k => cache[k] ?? null, put: (k, v) => { cache[k] = v; } }) },
   Utilities: { sleep: ms => { slept.push(ms / 1000); if (onSleep) { const f = onSleep; onSleep = null; f(); } }, getUuid: (() => { let n = 0; return () => "gen" + (++n); })(), formatDate: () => "2026-10-05 17:00:00" },
@@ -89,10 +92,10 @@ call({ action: "processRecord", id });
 ok(!props["NO_FAST_CONFIG_lite-x"] && st(id)[4] === "done", "原因が分からない400では高速化の設定を止めない（要約は従来設定で完了）");
 id = submit(13).id; reset(); script = [e400("thinking_level is not supported by this model"), sum("B")];
 call({ action: "processRecord", id });
-ok(props["NO_FAST_CONFIG_lite-x"] === "1", "設定が原因の400は覚える");
+ok(props["NO_THINKING_lite-x"] === "1" && !props["NO_FAST_CONFIG_lite-x"], "考える量の指定が原因の400は覚える（JSONの指定は続けて使う）");
 id = submit(14).id; reset(); script = [sum("C")];
 call({ action: "processRecord", id });
-ok(calls === 1 && !String(sentPayloads[0]).includes("thinkingConfig"), "覚えた後は最初から従来の設定で1回だけ呼ぶ");
+ok(calls === 1 && !String(sentPayloads[0]).includes("thinkingConfig") && String(sentPayloads[0]).includes("responseMimeType"), "覚えた後は最初から考える量の指定なしで1回だけ呼ぶ");
 call({ action: "submitTranscript", id: uuid(15), member: "m", interviewee: "=IMPORTDATA(\"x\")", transcript: "- 議題1について" });
 ok(st(uuid(15))[3].startsWith("'=") && st(uuid(15))[6].startsWith("'-"), "先頭が = や - の文字は ' を付けて保存");
 const h15 = call({ action: "getHistory", member: "m", q: "議題1" });

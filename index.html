@@ -1935,6 +1935,15 @@ function uniqueNames(names) {
 function SubmitProgress({ rec, onOpen, onShowHistory, onClose }) {
   const done = rec.status === "done";
   const failed = rec.status === "error";
+  const sending = rec.status === "sending";
+  // 送るのに10秒以上かかっているときは、待っていることを知らせる
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    setSlow(false);
+    if (!sending) return;
+    const t = setTimeout(() => setSlow(true), 10000);
+    return () => clearTimeout(t);
+  }, [rec.id, sending]);
   const color = done ? C.green : failed ? C.red : C.blue;
   const actionBtn = (label, onClick) => /*#__PURE__*/React.createElement("button", {
     onClick,
@@ -1989,7 +1998,14 @@ function SubmitProgress({ rec, onOpen, onShowHistory, onClose }) {
       fontWeight: 600,
       lineHeight: 1.5
     }
-  }, done ? "要約ができました" : failed ? "要約できませんでした" : "受け付けました。要約しています…"), failed && /*#__PURE__*/React.createElement("p", {
+  }, done ? "要約ができました" : failed ? "要約できませんでした" : sending ? "送っています…" : "受け付けました。要約しています…"), sending && slow && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.text2,
+      lineHeight: 1.6,
+      marginTop: 2
+    }
+  }, "混み合っています。そのままお待ちください（送れなかったときは、後で自動で送ります）"), failed && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       color: C.red,
@@ -2031,8 +2047,6 @@ function HomeScreen({ member, active, onShowHistory }) {
   const [nameCandidates, setNameCandidates] = useState(() => uniqueNames((cachedRef.current || []).map(r => r.interviewee)));
   const [transcript, setTranscript] = useState("");
   const [interviewee, setInterviewee] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [slowSending, setSlowSending] = useState(false);
   // 貼り付けボタンが使えなかったとき、手で貼り付ける欄を出す
   const [manualMode, setManualMode] = useState(false);
   // 相手の名前の候補は、名前の欄を押している間だけ出す
@@ -2045,11 +2059,8 @@ function HomeScreen({ member, active, onShowHistory }) {
   const flushingRef = useRef(false);
   // 直前に受け付けた記録。ホーム上部の案内を、その記録の進み具合（要約中→完了／失敗）に合わせて切り替える
   const [noticeId, setNoticeId] = useState(null);
-  // 送信中・送信に失敗した内容の記録番号。内容を変えたら新しい番号にする
-  const submitIdRef = useRef(null);
-  useEffect(() => {
-    submitIdRef.current = null;
-  }, [transcript, interviewee]);
+  // 今送っている記録の番号（同じ記録を同時に2回送らないように）
+  const inFlightRef = useRef(new Set());
   // 最近の記録と相手の入力候補を、1回の履歴取得からまとめて作る
   const fetchRecent = useCallback(() => {
     if (!member) return;
@@ -2070,7 +2081,7 @@ function HomeScreen({ member, active, onShowHistory }) {
       // （以前は、遅れて届いた一覧で、送ったばかりの記録と進み具合の案内が消えていた）
       setRecentRecs(prev => {
         const ids = new Set(recs.map(r => r.id));
-        const local = prev.filter(r => r._localAt && r._localAt >= startedAt && !ids.has(r.id));
+        const local = prev.filter(r => r._localAt && (r.status === "sending" || r._localAt >= startedAt - 120000) && !ids.has(r.id));
         return [...local, ...recs].slice(0, HOME_RECENT_COUNT);
       });
       setNameCandidates(prev => uniqueNames([...recs.map(r => r.interviewee), ...prev]));
@@ -2085,42 +2096,123 @@ function HomeScreen({ member, active, onShowHistory }) {
   useEffect(() => {
     const c = histCacheGet(member);
     if (!c) return;
-    const byId = new Map(recentRecs.map(r => [r.id, r]));
+    const recs = recentRecs.filter(r => r.status !== "sending");
+    const byId = new Map(recs.map(r => [r.id, r]));
     const known = new Set(c.records.map(r => r.id));
-    const added = recentRecs.filter(r => !known.has(r.id));
+    const added = recs.filter(r => !known.has(r.id));
     histCacheSet(member, [...added, ...c.records.map(r => byId.get(r.id) || r)], (c.total || 0) + added.length);
   }, [recentRecs]);
   useStatusPolling(recentRecs, setRecentRecs);
-  // 送信待ちの文字起こしを、古いものから順に送る。通信できなければそこでやめて次の機会に回す。
-  // 受け付けを断られたもの（送り直しても同じ結果になる）は送信待ちから外し、本文を入力欄に戻す。
-  const flushOutbox = useCallback(async () => {
-    if (flushingRef.current || navigator.onLine === false || !outboxGet().length) return;
-    flushingRef.current = true;
-    setFlushing(true);
-    for (const it of outboxGet()) {
+  // 1件を送る。startSummary: 受け付けと同時に、本文付きで要約開始も送る（GASは保存を待たずに
+  // AIを呼べる）。結果は { result: "accepted"（受け付けられた）| "rejected"（断られた。送り直しても
+  // 同じ）| "failed"（通信できなかった。後で送り直す）, error }。受け付けられたら送信待ちから外す。
+  const sendOne = async (it, startSummary) => {
+    inFlightRef.current.add(it.id);
+    try {
+      const processP = startSummary ? gasPost({
+        action: "processRecord",
+        id: it.id,
+        transcript: it.transcript
+      }, 120000).then(res => {
+        if (res && res.status === "done") {
+          const secs = normalizeSections(res.sections);
+          setRecentRecs(prev => prev.map(r => r.id === it.id ? {
+            ...r,
+            status: "done",
+            sections: secs
+          } : r));
+        }
+        return res;
+      }).catch(() => null) : null;
+      const submitP = gasPost({
+        action: "submitTranscript",
+        id: it.id,
+        member: it.member,
+        interviewee: it.interviewee,
+        transcript: it.transcript,
+        recordedAt: it.recordedAt
+      }, 90000);
       let res;
       try {
-        res = await gasPost({
-          action: "submitTranscript",
-          id: it.id,
-          member: it.member,
-          interviewee: it.interviewee,
-          transcript: it.transcript,
-          recordedAt: it.recordedAt
-        }, 90000);
-      } catch {
-        break;
+        // 受け付けの返事より先に要約の結果が届いた場合は、それを保存できた証拠とみなす
+        // （Google側の待ちで、受け付けの返事だけが大きく遅れることがあるため）
+        res = await new Promise((resolve, reject) => {
+          let submitError = null,
+            processGaveUp = !processP;
+          submitP.then(resolve, e => {
+            submitError = e;
+            if (processGaveUp) reject(e);
+          });
+          if (processP) processP.then(r => {
+            if (r && r.success && r.status && r.status !== "skipped") resolve({
+              success: true
+            });else {
+              processGaveUp = true;
+              if (submitError) reject(submitError);
+            }
+          });
+        });
+      } catch (e) {
+        // 時間切れ・通信エラーでも、GAS側では保存できていることがあるので確かめる
+        const st = e.isTimeout || e.retryable ? await gasPost({
+          action: "getRecordStatus",
+          id: it.id
+        }, 60000).catch(() => null) : null;
+        if (!(st && st.found)) return {
+          result: "failed",
+          error: e.message
+        };
+        res = {
+          success: true
+        };
       }
+      if (!res.success) return {
+        result: "rejected",
+        error: res.error
+      };
       const rest = outboxGet().filter(x => x.id !== it.id);
       outboxSet(rest);
       setOutbox(rest);
-      if (!res.success) {
-        setError("送信待ちの記録を送れませんでした: " + (res.error || "不明なエラー") + "（本文を入力欄に戻しました）");
-        setTranscript(t => t.trim() ? t : it.transcript);
-        setInterviewee(v => v.trim() ? v : it.interviewee || "");
-        setManualMode(true);
+      return {
+        result: "accepted"
+      };
+    } finally {
+      inFlightRef.current.delete(it.id);
+    }
+  };
+  // 送れなかった記録を送信待ちから外し、本文を入力欄に戻して知らせる
+  const giveBack = (it, message) => {
+    const rest = outboxGet().filter(x => x.id !== it.id);
+    outboxSet(rest);
+    setOutbox(rest);
+    lastSentForget(it.id);
+    setRecentRecs(prev => prev.filter(r => r.id !== it.id));
+    setNoticeId(n => n === it.id ? null : n);
+    setError(message + "（本文を入力欄に戻しました）");
+    setTranscript(t => t.trim() ? t : it.transcript);
+    setInterviewee(v => v.trim() ? v : it.interviewee || "");
+    setManualMode(true);
+  };
+  // 今送れなかった記録は案内から外し、「送信待ち」の表示に任せる
+  const markWaiting = id => {
+    setRecentRecs(prev => prev.filter(r => !(r.id === id && r.status === "sending")));
+    setNoticeId(n => n === id ? null : n);
+  };
+  // 送信待ちを古いものから順に送る。通信できなければそこでやめて次の機会に回す。
+  const flushOutbox = useCallback(async () => {
+    if (flushingRef.current || navigator.onLine === false) return;
+    if (!outboxGet().some(x => !inFlightRef.current.has(x.id))) return;
+    flushingRef.current = true;
+    setFlushing(true);
+    for (const it of outboxGet()) {
+      if (inFlightRef.current.has(it.id)) continue;
+      const r = await sendOne(it, false);
+      if (r.result === "failed") break;
+      if (r.result === "rejected") {
+        giveBack(it, "送信待ちの記録を送れませんでした: " + (r.error || "不明なエラー"));
         continue;
       }
+      kickProcess(it.id, setRecentRecs);
       if (it.member !== member) continue;
       setRecentRecs(prev => [{
         id: it.id,
@@ -2133,7 +2225,6 @@ function HomeScreen({ member, active, onShowHistory }) {
         _localAt: Date.now()
       }, ...prev.filter(r => r.id !== it.id)].slice(0, HOME_RECENT_COUNT));
       setNoticeId(it.id);
-      kickProcess(it.id, setRecentRecs);
     }
     flushingRef.current = false;
     setFlushing(false);
@@ -2160,8 +2251,10 @@ function HomeScreen({ member, active, onShowHistory }) {
   const trimmed = transcript.trim();
   const tooLong = trimmed.length > MAX_TRANSCRIPT_CHARS;
   // 直前に送った内容・送信待ちの内容と同じなら送らない
-  const duplicate = !!trimmed && !submitting && (lastSentIs(trimmed) || outbox.some(x => x.transcript === trimmed));
-  const canSubmit = !!trimmed && !tooLong && !submitting && !duplicate;
+  const duplicate = !!trimmed && (lastSentIs(trimmed) || outbox.some(x => x.transcript === trimmed));
+  const canSubmit = !!trimmed && !tooLong && !duplicate;
+  // 送信待ちのうち、今送っている最中（案内に「送っています…」と出ている）でないもの
+  const waitingCount = outbox.filter(x => !recentRecs.some(r => r.id === x.id && r.status === "sending")).length;
   const canReadClipboard = !!(navigator.clipboard && navigator.clipboard.readText);
   const pasteFromClipboard = async () => {
     try {
@@ -2180,137 +2273,63 @@ function HomeScreen({ member, active, onShowHistory }) {
       setError("貼り付けできませんでした。欄を長押しして「ペースト」を選んでください。");
     }
   };
-  // 送れなかった内容を送信待ちとして端末に保存し、入力欄を空にする（保存できなければ false）
-  const queueForLater = (recId, pressedAt) => {
-    const items = outboxGet().filter(x => x.id !== recId);
-    if (items.length >= OUTBOX_MAX) return false;
-    items.push({
-      id: recId,
+  // ［要約する］：返事を待たずに、まず送信待ちとして端末に保存して入力欄を空にし、案内を
+  // 「送っています…」にする。送るのは裏で行い、受け付けられたら「要約しています…」に、
+  // 要約の結果が届いたら「要約ができました」に切り替わる。通信できなかったときは送信待ちに
+  // 残り、後で自動で送る（同じ番号なので2件にならない）。
+  const handleSubmit = () => {
+    if (!canSubmit) return;
+    const items = outboxGet();
+    if (items.length >= OUTBOX_MAX) {
+      setError(`送信待ちが${OUTBOX_MAX}件たまっています。電波の良いところで［今すぐ送る］を押してから、もう一度お試しください。`);
+      return;
+    }
+    const it = {
+      id: newRecordId(),
       member,
       interviewee: typedName,
       transcript: trimmed,
-      recordedAt: localDateTime(pressedAt)
-    });
-    if (!outboxSet(items)) return false;
-    setOutbox(items);
-    lastSentSet(trimmed, recId);
+      recordedAt: localDateTime(new Date())
+    };
+    const saved = outboxSet([...items, it]);
+    if (saved) setOutbox([...items, it]);
+    setError(null);
+    lastSentSet(trimmed, it.id);
     if (typedName) setNameCandidates(prev => uniqueNames([typedName, ...prev]));
     setTranscript("");
     setManualMode(false);
     setInterviewee("");
-    return true;
-  };
-  const handleSubmit = async () => {
-    if (!canSubmit) return;
-    setError(null);
-    setNoticeId(null);
-    let accepted;
-    // 同じ内容を送り直す間は同じ番号を使う（エラー後に押し直しても2件にならない）
-    if (!submitIdRef.current) submitIdRef.current = newRecordId();
-    const recId = submitIdRef.current;
-    const pressedAt = new Date();
-    // 電波がないと分かっているときは、送らずにすぐ送信待ちにする
-    if (navigator.onLine === false && queueForLater(recId, pressedAt)) return;
-    setSubmitting(true);
-    // 要約開始は、受け付けの返事を待たずに同時に送る（Google側の待ち時間を1回分減らす）。
-    // 先に着いた場合、GASは受け付けの保存を少し待ってから要約する。応答が届かなくても、
-    // 受け付け済みの記録は1分おきの定期実行が要約する。開いたままなら結果を反映する。
-    let summarized = null;
-    const processP = gasPost({
-      action: "processRecord",
-      id: recId
-    }, 120000).then(res => {
-      if (res && res.status === "done") {
-        summarized = normalizeSections(res.sections);
-        setRecentRecs(prev => prev.map(r => r.id === recId ? {
-          ...r,
-          status: "done",
-          sections: summarized
-        } : r));
-      }
-      return res;
-    }).catch(() => null);
-    const submitP = gasPost({
-      action: "submitTranscript",
-      id: recId,
-      member,
-      interviewee: typedName,
-      transcript: trimmed
-    }, 90000);
-    // Google側の待ちで返事が遅いときは、待っていることを知らせる
-    const slowTimer = setTimeout(() => setSlowSending(true), 10000);
-    try {
-      // 文字起こしを保存（受け付け）できたら、すぐ利用者に返す。ここで
-      // 保存された記録は、この後アプリを閉じても必ず要約まで進む。
-      // 受け付けの返事より先に要約の結果が届いた場合は、それを保存できた証拠とみなす
-      // （Google側の待ちで、受け付けの返事だけが大きく遅れることがあるため）。
-      accepted = await new Promise((resolve, reject) => {
-        let submitError = null,
-          processGaveUp = false;
-        submitP.then(r => r.success ? resolve({
-          id: r.id
-        }) : reject(new Error(r.error || "GASエラー")), e => {
-          submitError = e;
-          if (processGaveUp) reject(e);
-        });
-        processP.then(r => {
-          if (r && r.success && r.status && r.status !== "skipped") resolve({
-            id: recId
-          });else {
-            processGaveUp = true;
-            if (submitError) reject(submitError);
-          }
-        });
-      });
-    } catch (e) {
-      // 時間切れ・通信エラーでも、GAS側では保存できていることがあるので確かめる
-      if (e.isTimeout || e.retryable) {
-        const st = await gasPost({
-          action: "getRecordStatus",
-          id: recId
-        }, 60000).catch(() => null);
-        if (st && st.found) accepted = {
-          id: recId
-        };
-      }
-      if (!accepted) {
-        clearTimeout(slowTimer);
-        setSlowSending(false);
-        // 通信できなかった・時間切れのときは、送信待ちにして後で自動で送る
-        if ((e.isTimeout || e.retryable) && queueForLater(recId, pressedAt)) {
-          setSubmitting(false);
-          return;
-        }
-        let msg = e.message || "不明なエラー";
-        if (e.isTimeout || e.retryable) {
-          msg = navigator.onLine === false ? "オフラインです。電波の良いところで、もう一度「要約する」を押してください（押し直しても2件にはなりません）。" : "サーバーが混み合っていて送れませんでした。少し待って、もう一度「要約する」を押してください（押し直しても2件にはなりません）。";
-        }
-        setError("送信できませんでした: " + msg);
-        setSubmitting(false);
-        return;
-      }
-    }
-    clearTimeout(slowTimer);
-    setSlowSending(false);
-    // 要約が受け付けより先に終わっていれば、最初から要約を出す。まだなら「要約中」に
-    // して状況確認に任せる（送り直しで既に完了済みだった場合も、状況確認が要約を取ってくる）
     setRecentRecs(prev => [{
-      id: accepted.id,
-      date: new Date().toString(),
+      id: it.id,
+      date: it.recordedAt,
       member,
       interviewee: typedName,
-      status: summarized ? "done" : "processing",
-      sections: summarized,
+      status: "sending",
+      sections: null,
       hasTranscript: true,
       _localAt: Date.now()
-    }, ...prev.filter(r => r.id !== accepted.id)].slice(0, HOME_RECENT_COUNT));
-    if (typedName) setNameCandidates(prev => uniqueNames([typedName, ...prev]));
-    setTranscript("");
-    setManualMode(false);
-    setInterviewee("");
-    setSubmitting(false);
-    setNoticeId(accepted.id);
-    lastSentSet(trimmed, accepted.id);
+    }, ...prev.filter(r => r.id !== it.id)].slice(0, HOME_RECENT_COUNT));
+    setNoticeId(it.id);
+    // 電波がないと分かっているときは送らない（送信待ちに残り、電波が戻ったら送る）
+    if (navigator.onLine === false && saved) {
+      markWaiting(it.id);
+      return;
+    }
+    sendOne(it, true).then(r => {
+      if (r.result === "accepted") {
+        setRecentRecs(prev => prev.map(x => x.id === it.id && x.status === "sending" ? {
+          ...x,
+          status: "processing"
+        } : x));
+      } else if (r.result === "rejected") {
+        giveBack(it, "送信できませんでした: " + (r.error || "不明なエラー"));
+      } else if (saved) {
+        markWaiting(it.id);
+      } else {
+        // 端末に保存できない環境（プライベートブラウズなど）では、後で送れないので入力欄に戻す
+        giveBack(it, "送信できませんでした。電波の良いところで、もう一度「要約する」を押してください");
+      }
+    });
   };
   // 画面は「貼り付け前」と「貼り付け後」で切り替える。貼り付け前は大きな貼り付け枠だけ、
   // 貼り付け後に本文・相手・［要約する］を出す（同じ強さのボタンや欄が並んで迷わないように）。
@@ -2367,7 +2386,7 @@ function HomeScreen({ member, active, onShowHistory }) {
       lineHeight: 1.6,
       color: C.red
     }
-  }, error), outbox.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, error), waitingCount > 0 && /*#__PURE__*/React.createElement("div", {
     role: "status",
     style: {
       display: "flex",
@@ -2396,7 +2415,7 @@ function HomeScreen({ member, active, onShowHistory }) {
       fontWeight: 600,
       lineHeight: 1.5
     }
-  }, flushing ? "送信待ちを送っています…" : `送信待ち ${outbox.length}件`), !flushing && /*#__PURE__*/React.createElement("p", {
+  }, flushing ? "送信待ちを送っています…" : `送信待ち ${waitingCount}件`), !flushing && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       color: C.text2,
@@ -2513,7 +2532,7 @@ function HomeScreen({ member, active, onShowHistory }) {
       lineHeight: 1.6,
       margin: "6px 2px 0"
     }
-  }, "直前に送った内容と同じです。別の録音の文字起こしをコピーしてください"), canReadClipboard && !submitting && /*#__PURE__*/React.createElement("button", {
+  }, "直前に送った内容と同じです。別の録音の文字起こしをコピーしてください"), canReadClipboard && /*#__PURE__*/React.createElement("button", {
     onClick: () => {
       setTranscript("");
       setManualMode(false);
@@ -2582,8 +2601,8 @@ function HomeScreen({ member, active, onShowHistory }) {
       width: "100%",
       marginTop: 18,
       padding: "14px",
-      background: canSubmit || submitting ? C.blue : C.disabledBg,
-      color: canSubmit || submitting ? "#fff" : C.text2,
+      background: canSubmit ? C.blue : C.disabledBg,
+      color: canSubmit ? "#fff" : C.text2,
       border: "none",
       borderRadius: 12,
       fontSize: 16,
@@ -2594,23 +2613,11 @@ function HomeScreen({ member, active, onShowHistory }) {
       gap: 8,
       cursor: canSubmit ? "pointer" : "default"
     }
-  }, submitting ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Ic, {
-    n: "spinner",
-    size: 15,
-    color: "#fff",
-    cls: "spin"
-  }), "送信中…") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Ic, {
+  }, /*#__PURE__*/React.createElement(Ic, {
     n: "wand-magic-sparkles",
     size: 15,
-    color: "#fff"
-  }), "要約する")), submitting && slowSending && /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 12,
-      color: C.text2,
-      marginTop: 8,
-      textAlign: "center"
-    }
-  }, navigator.onLine === false ? "オフラインです。電波が戻るのを待っています" : "混み合っています。そのままお待ちください")), showLast && /*#__PURE__*/React.createElement("button", {
+    color: canSubmit ? "#fff" : C.text2
+  }), "要約する")), showLast && /*#__PURE__*/React.createElement("button", {
     // 最近の記録は「前回」の1件だけ（ほかは履歴から）
     onClick: () => setSelectedRec(lastRec),
     style: {
@@ -2649,7 +2656,7 @@ function HomeScreen({ member, active, onShowHistory }) {
       marginLeft: "auto",
       flexShrink: 0
     }
-  }, lastRec.status === "error" ? "失敗" : ["queued", "processing"].includes(lastRec.status) ? "要約中" : relDate(lastRec.date)), /*#__PURE__*/React.createElement(Ic, {
+  }, lastRec.status === "error" ? "失敗" : lastRec.status === "sending" ? "送信中" : ["queued", "processing"].includes(lastRec.status) ? "要約中" : relDate(lastRec.date)), /*#__PURE__*/React.createElement(Ic, {
     n: "chevron-right",
     size: 12,
     color: C.text2,
@@ -2709,7 +2716,7 @@ const HELP_STEPS = [{
   body: "録音を開いて「文字起こしを表示」→「文字起こしをコピー」"
 }, {
   title: "貼り付けて要約",
-  body: "ホームの「タップして貼り付け」→［要約する］。受け付け後はアプリを閉じても大丈夫"
+  body: "ホームの「タップして貼り付け」→［要約する］。「受け付けました」と出たら、アプリを閉じても大丈夫"
 }, {
   title: "見返す",
   body: "メニューの「履歴」から。［コピー］［共有］［編集］、削除は要約画面のいちばん下"

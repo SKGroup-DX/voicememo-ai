@@ -367,11 +367,18 @@ const RUN_HARD_LIMIT_MS = 330 * 1000;
 // 受け付け（submitTranscript）と要約開始（processRecord）はアプリから同時に送られて
 // くるので、要約開始が先に着いた場合は、受け付けの保存をこの時間まで待つ
 const WAIT_FOR_SUBMIT_MS = 20 * 1000;
+// 受け付けたばかりの記録は、アプリが本文付きで要約開始を送ってくる（下の processWithTranscript_）。
+// その要約と二重にならないよう、定期実行は「押してからこの時間がたっていない、まだ誰も手を付けて
+// いない記録」を拾わない。要約開始が届かなかった場合は、この時間の後に定期実行が拾う。
+const FRESH_GRACE_MS = 3 * 60 * 1000;
 
 function processRecord(body) {
   const id = body.id ? String(body.id) : "";
   if (!id) return { success: false, error: "id required" };
+  const startedAt = Date.now();
   const auth = getGeminiAuth();
+  const transcript = String(body.transcript || "").trim();
+  if (transcript && transcript.length <= MAX_TRANSCRIPT_CHARS) return processWithTranscript_(id, transcript, auth, startedAt);
   let job = claimQueuedRow_(id);
   const waitUntil = Date.now() + WAIT_FOR_SUBMIT_MS;
   while (!job && Date.now() < waitUntil && findRecordRowById(recordsSheet(), id) < 0) {
@@ -383,29 +390,95 @@ function processRecord(body) {
     finishJob_(job, { error: "文字起こしテキストがありません" });
     return { success: true, id, status: "error" };
   }
+  const waitMs = Date.now() - startedAt;
+  const aiStartedAt = Date.now();
   try {
-    const t0 = Date.now();
     const sections = callGeminiSummarize(job.transcript, auth, RETRY_POLICY_SYNC, job.forceType);
-    console.log("[processRecord] 要約にかかった時間:", ((Date.now() - t0) / 1000).toFixed(1), "秒 ／ 文字数:", job.transcript.length, "／ 種別:", sections.meetingType);
-    finishJob_(job, { sections });
+    console.log("[processRecord] 要約にかかった時間:", ((Date.now() - aiStartedAt) / 1000).toFixed(1), "秒 ／ 文字数:", job.transcript.length, "／ 種別:", sections.meetingType);
+    finishJob_(job, { sections, timing: makeTiming_(job.id, "その場", job.transcript.length, startedAt, waitMs, aiStartedAt) });
     return { success: true, id, status: "done", sections };
   } catch (e) {
+    const timing = makeTiming_(job.id, "その場", job.transcript.length, startedAt, waitMs, aiStartedAt);
     if (e.permanent) {
       // やり直しても同じ結果になるもの（安全確認での拒否など）は、定期実行に回さず失敗にする
       console.warn("[processRecord] やり直しても結果が変わらないため失敗にする id:", id, e.message);
-      finishJob_(job, { error: e.userMessage || GENERIC_ERROR_MESSAGE });
+      finishJob_(job, { error: e.userMessage || GENERIC_ERROR_MESSAGE, timing });
       return { success: true, id, status: "error", error: e.userMessage || GENERIC_ERROR_MESSAGE };
     }
     console.warn("[processRecord] その場での要約をあきらめ、定期実行に任せる id:", id, e.message);
-    finishJob_(job, { requeue: true });
+    finishJob_(job, { requeue: true, timing });
     return { success: true, id, status: "queued" };
   }
+}
+
+// 本文付きの要約開始（アプリが［要約する］で受け付けと同時に送る）。受け付けの保存を待たずに
+// すぐAIを呼び、終わってから同じ記録に書き込む（以前は保存とその順番待ちを待ってから呼んでいた）。
+// 受け付けた行は queued のまま（FRESH_GRACE_MS の間は定期実行が拾わない）なので、二重には要約しない。
+// 書き込むのは、行の本文が送られてきた本文と同じで、まだ完了していない場合だけ。
+function processWithTranscript_(id, transcript, auth, startedAt) {
+  const aiStartedAt = Date.now();
+  let sections = null;
+  let failure = null;
+  try {
+    sections = callGeminiSummarize(transcript, auth, RETRY_POLICY_SYNC, "");
+  } catch (e) {
+    failure = e;
+  }
+  const aiEndedAt = Date.now();
+  const timing = makeTiming_(id, "その場（本文付き）", transcript.length, startedAt, 0, aiStartedAt);
+  // 受け付けの保存がまだなら待つ（AIを呼んでいる間に、ほとんどの場合は保存が済んでいる）
+  const sheet = recordsSheet();
+  const waitUntil = Date.now() + WAIT_FOR_SUBMIT_MS;
+  while (findRecordRowById(sheet, id) < 0 && Date.now() < waitUntil) Utilities.sleep(500);
+  timing.waitMs = Date.now() - aiEndedAt;
+  let outcome;
+  try {
+    outcome = withLock_(() => {
+      const row = findRecordRowById(sheet, id);
+      if (row < 0) return { status: "skipped", note: "受け付けが見つからない" };
+      const values = sheet.getRange(row, 1, 1, NUM_COLS).getValues()[0];
+      const status = String(values[COL.STATUS - 1] || "");
+      const summary = parseSections(values[COL.SECTIONS - 1]);
+      if (status === "done") return { status: "done", sections: stripTranscript(summary), note: "完了済みのため書き込まず" };
+      if (rowTranscript(values) !== transcript || (summary && summary.requestedType)) {
+        // 本文が違う・種類の指定がある場合は、通常の流れ（定期実行など）に任せる
+        return { status, note: "書き込まず（通常の流れに任せる）" };
+      }
+      if (sections) {
+        sheet.getRange(row, COL.SECTIONS).setValue(JSON.stringify(sections));
+        sheet.getRange(row, COL.STATUS).setValue("done");
+        sheet.getRange(row, COL.PROCESS_ERROR).setValue("");
+        recordTiming_(timing, values, "完了");
+        return { status: "done", sections, note: "完了" };
+      }
+      if (failure.permanent && status === "queued") {
+        const message = failure.userMessage || GENERIC_ERROR_MESSAGE;
+        sheet.getRange(row, COL.STATUS).setValue("error");
+        sheet.getRange(row, COL.PROCESS_ERROR).setValue(cellText_(message));
+        recordTiming_(timing, values, "失敗");
+        return { status: "error", error: message, note: "失敗として記録" };
+      }
+      // 一時的な失敗：処理開始時刻を入れて、定期実行がすぐ拾えるようにする（受け付け直後の待ちをやめる）
+      if (status === "queued") sheet.getRange(row, COL.PROCESSING_STARTED_AT).setValue(new Date());
+      recordTiming_(timing, values, "後回し");
+      return { status, note: "定期実行に任せる" };
+    }, 30000);
+  } catch (e) {
+    console.error("[processRecord] 結果を書き込めませんでした id:", id, e.message);
+    return { success: true, id, status: "queued" };
+  }
+  console.log("[processRecord] 本文付き id:", id, "（" + outcome.note + "）AI", ((aiEndedAt - aiStartedAt) / 1000).toFixed(1), "秒 ／ 文字数:", transcript.length, failure ? "／ 失敗: " + failure.message : "");
+  const res = { success: true, id, status: outcome.status };
+  if (outcome.sections) res.sections = outcome.sections;
+  if (outcome.error) res.error = outcome.error;
+  return res;
 }
 
 // 定期実行（setupTriggersで1分おきに設定）。受け付け済みの記録を1件ずつ要約する。
 // 複数件たまっていても、拾い始めるのは開始から1分まで（長引いた分は次の回に回す）。
 function runPendingJobs() {
   const startedAt = Date.now();
+  flushTimings_();
   // 要約待ちが無ければ、状態の列だけ読んですぐ終える（毎分動くので軽くしておく）
   if (findQueuedRow_(recordsSheet()) < 0) return;
   let auth;
@@ -419,30 +492,43 @@ function runPendingJobs() {
   while (Date.now() - startedAt < RUN_PICKUP_LIMIT_MS) {
     const job = claimQueuedRow_(null);
     if (!job) return;
+    const jobStartedAt = Date.now();
+    const timing = () => makeTiming_(job.id, "定期実行", job.transcript.length, jobStartedAt, 0, jobStartedAt);
     try {
       if (!job.transcript) throw userError_("文字起こしテキストがありません", { permanent: true });
       console.log("[runPendingJobs] 要約開始 id:", job.id);
-      const t0 = Date.now();
       const policy = Object.assign({}, RETRY_POLICY_BACKGROUND, {
         deadline: Math.min(Date.now() + RETRY_POLICY_BACKGROUND.budgetMs, runEnd)
       });
       const sections = callGeminiSummarize(job.transcript, auth, policy, job.forceType);
-      const result = finishJob_(job, { sections });
-      console.log("[runPendingJobs] 完了 id:", job.id, "（" + result + "）", ((Date.now() - t0) / 1000).toFixed(1) + "秒");
+      const result = finishJob_(job, { sections, timing: timing() });
+      console.log("[runPendingJobs] 完了 id:", job.id, "（" + result + "）", ((Date.now() - jobStartedAt) / 1000).toFixed(1) + "秒");
     } catch (e) {
-      const result = finishJob_(job, { error: e.userMessage || GENERIC_ERROR_MESSAGE });
+      const result = finishJob_(job, { error: e.userMessage || GENERIC_ERROR_MESSAGE, timing: timing() });
       console.error("[runPendingJobs] 失敗 id:", job.id, e.message, "（" + result + "）");
     }
   }
 }
 
-// 状態の列だけを読んで、要約待ち（queued）の行を探す（なければ-1）
+// 要約待ち（queued）の行を探す（なければ-1）。受け付けたばかりで、アプリからの本文付きの
+// 要約開始が担当している行（押してから FRESH_GRACE_MS 以内で、処理開始時刻が空）は飛ばす。
 function findQueuedRow_(sheet) {
   const lastRow = sheet.getLastRow();
   if (lastRow <= HEADER_ROW) return -1;
-  const statuses = sheet.getRange(HEADER_ROW + 1, COL.STATUS, lastRow - HEADER_ROW, 1).getValues();
-  for (let i = 0; i < statuses.length; i++) {
-    if (String(statuses[i][0]) === "queued") return HEADER_ROW + 1 + i;
+  const n = lastRow - HEADER_ROW;
+  const statuses = sheet.getRange(HEADER_ROW + 1, COL.STATUS, n, 1).getValues();
+  let dates = null;
+  let starts = null;
+  const now = Date.now();
+  for (let i = 0; i < n; i++) {
+    if (String(statuses[i][0]) !== "queued") continue;
+    if (!dates) {
+      dates = sheet.getRange(HEADER_ROW + 1, COL.DATE, n, 1).getValues();
+      starts = sheet.getRange(HEADER_ROW + 1, COL.PROCESSING_STARTED_AT, n, 1).getValues();
+    }
+    const t = recordMillis_(dates[i][0]);
+    if (!starts[i][0] && t && now - t < FRESH_GRACE_MS) continue;
+    return HEADER_ROW + 1 + i;
   }
   return -1;
 }
@@ -498,16 +584,19 @@ function finishJob_(job, outcome) {
         sheet.getRange(row, COL.SECTIONS).setValue(JSON.stringify(outcome.sections));
         sheet.getRange(row, COL.STATUS).setValue("done");
         sheet.getRange(row, COL.PROCESS_ERROR).setValue("");
+        recordTiming_(outcome.timing, values, "完了");
         return "完了";
       }
       const mine = status === "processing" && Math.abs(toMillis_(values[COL.PROCESSING_STARTED_AT - 1]) - job.token) < 1000;
       if (!mine) return "他の処理が担当中のため書き込まず";
       if (outcome.requeue) {
         sheet.getRange(row, COL.STATUS).setValue("queued");
+        recordTiming_(outcome.timing, values, "後回し");
         return "要約待ちに戻した";
       }
       sheet.getRange(row, COL.STATUS).setValue("error");
       sheet.getRange(row, COL.PROCESS_ERROR).setValue(cellText_(outcome.error || GENERIC_ERROR_MESSAGE));
+      recordTiming_(outcome.timing, values, "失敗");
       return "失敗として記録";
     }, 30000);
   } catch (e) {
@@ -602,6 +691,7 @@ function fetchGeminiWithRetry(url, payload, label, auth, policy) {
   const deadline = p.deadline || (Date.now() + p.budgetMs);
   let resText;
   for (let attempt = 1; ; attempt++) {
+    aiStats_.calls++;
     const res = UrlFetchApp.fetch(url, makeOptions(payload, auth));
     const resCode = res.getResponseCode();
     resText = res.getContentText();
@@ -628,6 +718,7 @@ function fetchGeminiWithRetry(url, payload, label, auth, policy) {
       throw userError_(busyMessage);
     }
     console.log("[" + label + " API] " + waitSec + "秒後にやり直し");
+    aiStats_.sleptMs += waitSec * 1000;
     Utilities.sleep(waitSec * 1000);
   }
 }
@@ -707,48 +798,76 @@ function extractGeminiText(resText, label) {
 // Gemini 構造化要約
 // ================================================================
 // 要約を速く・安定させるための追加設定。
-// thinkingLevel "low": モデルが答える前の内部推論（初期設定は中）を減らし、待ち時間を短くする。
-//   要約や1on1/会議の判定程度なら品質への影響は小さい。
-// responseMimeType JSON: 返答を必ずJSONにし、形式崩れによる失敗（＝後回し処理行き）を減らす。
-// モデルやAPIの版によってはこれらの指定を受け付けず400になるため、その場合は
-// 従来の設定で自動的にやり直す（要約自体は止めない）。
-const SUMMARIZE_FAST_CONFIG = {
-  responseMimeType: "application/json",
-  thinkingConfig: { thinkingLevel: "low" }
-};
-// 400のエラー文がこれに当てはまるときだけ「高速化の設定のせい」とみなして覚える
-// （一時的な別の原因の400で、ずっと遅い設定のままにならないように）
-const FAST_CONFIG_ERROR_PATTERN = /thinking|response_?mime|mime_?type|generation_?config|unknown name/i;
+// thinkingLevel：モデルが答える前に考える量。少ないほど速い。スクリプトプロパティ
+//   GEMINI_THINKING_LEVEL で変えられる（未設定なら "low"。"minimal" にできるかは、
+//   エディタで testThinkingLevels を実行して速さを比べてから決める）。
+// responseMimeType JSON：返答を必ずJSONにし、形式崩れによる失敗（＝後回し処理行き）を減らす。
+// モデルやAPIの版によってはこれらの指定を受け付けず400になるため、その場合は外せる設定を
+// 外して自動的にやり直す（要約自体は止めない）。受け付けないと分かった設定はスクリプト
+// プロパティに覚えて、次からは最初から使わない（毎回、断られる呼び出しをはさまないように）。
+//   NO_THINKING_<モデル名>：考える量の指定を受け付けない
+//   NO_FAST_CONFIG_<モデル名>：JSONの指定も含めて受け付けない
+// 返答の項目まで厳密に決める指定（responseSchema）は使わない。Geminiは項目を名前順に並べて
+// 書くため、種類（meetingType）を決める前に中身を書き始めてしまうため。
+const DEFAULT_THINKING_LEVEL = "low";
+const THINKING_LEVELS = ["minimal", "low", "medium", "high"];
+const MIME_CONFIG_ERROR_PATTERN = /response_?mime|mime_?type|generation_?config|unknown name/i;
+
+// 1回の要約での、AIの呼び出し回数・混雑で待った時間・使った設定（計測用）
+let aiStats_ = { calls: 0, sleptMs: 0, config: "" };
+
+function thinkingLevel_() {
+  const v = prop_("GEMINI_THINKING_LEVEL").trim().toLowerCase();
+  return THINKING_LEVELS.indexOf(v) !== -1 ? v : DEFAULT_THINKING_LEVEL;
+}
 
 // forceType: "1on1" | "group" を渡すと、AIに判定させずにその種類として要約する
-function callGeminiSummarize(transcript, auth, policy, forceType) {
-  const url = GEMINI_API_BASE + geminiModel() + ":generateContent";
-
+// thinkingOverride: 考える量を指定して呼ぶ（testThinkingLevels 用）
+function callGeminiSummarize(transcript, auth, policy, forceType, thinkingOverride) {
+  const model = geminiModel();
+  const url = GEMINI_API_BASE + model + ":generateContent";
   const prompt = getDefaultSystemPrompt(transcript.length, forceType) + "\n\n【文字起こし内容】\n" + transcript;
-  const baseConfig = { temperature: 0.3, maxOutputTokens: 32768 };
-  const buildPayload = config => ({
-    contents: [{ parts: [{ text: prompt }] }],
-    generationConfig: config
-  });
+  aiStats_ = { calls: 0, sleptMs: 0, config: "" };
 
-  // 高速化の設定を受け付けないモデルは覚えておき、次からは最初から従来の設定で呼ぶ
-  // （毎回、断られる呼び出しを1回はさむと、その分だけ遅くなるため）
-  const noFastKey = "NO_FAST_CONFIG_" + geminiModel();
+  const noFastKey = "NO_FAST_CONFIG_" + model;
+  const noThinkingKey = "NO_THINKING_" + model;
+  let json = !prop_(noFastKey);
+  let levels = [];
+  if (json && !prop_(noThinkingKey)) {
+    const level = thinkingOverride || thinkingLevel_();
+    // "low" 以外を指定していて断られたら、"low" でやり直す
+    levels = level === DEFAULT_THINKING_LEVEL ? [level] : [level, DEFAULT_THINKING_LEVEL];
+  }
   let jsonText;
-  if (prop_(noFastKey)) {
-    jsonText = extractGeminiText(fetchGeminiWithRetry(url, buildPayload(baseConfig), "要約", auth, policy), "要約");
-  } else {
+  for (;;) {
+    const config = { temperature: 0.3, maxOutputTokens: 32768 };
+    if (json) config.responseMimeType = "application/json";
+    if (levels.length) config.thinkingConfig = { thinkingLevel: levels[0] };
+    aiStats_.config = "考える量:" + (levels.length ? levels[0] : "指定なし") + (json ? "／JSON" : "");
     try {
-      const resText = fetchGeminiWithRetry(url, buildPayload(Object.assign({}, baseConfig, SUMMARIZE_FAST_CONFIG)), "要約", auth, policy);
-      jsonText = extractGeminiText(resText, "要約");
+      const payload = { contents: [{ parts: [{ text: prompt }] }], generationConfig: config };
+      jsonText = extractGeminiText(fetchGeminiWithRetry(url, payload, "要約", auth, policy), "要約");
+      break;
     } catch (e) {
-      if (e.apiCode !== 400) throw e;
-      console.warn("[要約] 高速化の設定が受け付けられなかったため、従来の設定でやり直します:", e.apiMessage);
-      const resText = fetchGeminiWithRetry(url, buildPayload(baseConfig), "要約", auth, policy);
-      jsonText = extractGeminiText(resText, "要約");
-      if (FAST_CONFIG_ERROR_PATTERN.test(e.apiMessage || "")) {
+      if (e.apiCode !== 400 || (!json && !levels.length)) throw e;
+      const msg = e.apiMessage || "";
+      console.warn("[要約] 設定が受け付けられなかったため、設定を変えてやり直します:", msg);
+      if (levels.length && /thinking/i.test(msg)) {
+        levels.shift();
+        if (!levels.length) {
+          setProp_(noThinkingKey, "1");
+          console.log("[要約] " + model + " では次から考える量を指定しません");
+        }
+      } else if (json && MIME_CONFIG_ERROR_PATTERN.test(msg)) {
+        json = false;
+        levels = [];
         setProp_(noFastKey, "1");
-        console.log("[要約] " + geminiModel() + " では次から高速化の設定を使いません");
+        console.log("[要約] " + model + " では次から高速化の設定を使いません");
+      } else {
+        // 原因が分からない400：今回だけ設定なしでやり直す（一時的な別の原因で、ずっと遅い設定に
+        // ならないよう、覚えない）
+        json = false;
+        levels = [];
       }
     }
   }
@@ -768,9 +887,41 @@ function callGeminiSummarize(transcript, auth, policy, forceType) {
     parsed.meetingType = forceType;
     if (forceType === "group") delete parsed.analysis;
   }
-  // 形を確かめて整える（崩れた形のまま保存すると、検索や画面の表示が壊れるため）。
-  // 文字起こしはTRANSCRIPT列にあるので、要約には入れない。
-  return normalizeSummary_(parsed);
+  // AIの短い形の返答を保存する形に直し、形を確かめて整える（崩れた形のまま保存すると、
+  // 検索や画面の表示が壊れるため）。文字起こしはTRANSCRIPT列にあるので、要約には入れない。
+  return normalizeSummary_(expandSummary_(parsed));
+}
+
+// AIには見出しの名前や絵文字を書かせず、短い名前（goal など）で項目だけを返させる
+// （書く量が減るほど速く終わる）。ここで保存する形（見出しの名前・絵文字付き）に直す。
+// 以前の形（sections の配列）で返ってきた場合はそのまま使う。
+const SUMMARY_TEMPLATES = {
+  "1on1": [["goal", "今日のゴール", "🎯"], ["voice", "本人の声", "💬"], ["action", "アクション", "✅"], ["follow", "フォロー事項", "📅"]],
+  group: [["purpose", "目的・アジェンダ", "🎯"], ["decisions", "主な決定事項", "✅"], ["todos", "担当者ごとのToDo", "📋"], ["pending", "保留事項・継続協議テーマ", "⏳"]]
+};
+function expandSummary_(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw.sections)) return raw;
+  const type = raw.meetingType === "group" || raw.meetingType === "1on1"
+    ? raw.meetingType
+    : (raw.goal || raw.voice ? "1on1" : "group");
+  const out = {
+    meetingType: type,
+    sections: SUMMARY_TEMPLATES[type].map(t => {
+      const v = raw[t[0]];
+      const items = Array.isArray(v) ? v : (v == null ? [] : [v]);
+      return { key: t[0], label: t[1], emoji: t[2], items: items.length ? items : ["特になし"] };
+    })
+  };
+  const a = raw.analysis;
+  if (type === "1on1" && a && typeof a === "object") {
+    out.analysis = {
+      speakingRatio: { self: a.self, other: a.other },
+      listeningScore: a.listening,
+      listeningComment: a.comment,
+      openQuestionRatio: a.open
+    };
+  }
+  return out;
 }
 
 // 要約の形を確かめて、アプリが表示できる形に整える。
@@ -838,46 +989,25 @@ function getDefaultSystemPrompt(transcriptLength, forceType) {
 ${step1}
 
 【ステップ2：判定結果に応じた出力】
-以下のJSON形式で出力してください。meetingTypeが"1on1"の場合のみanalysisキーを含め、
-"group"の場合はanalysisキー自体を出力しないでください。
+以下のJSONだけを出力してください（説明文やコードブロックは不要）。
 
-{
-  "meetingType": "1on1" または "group",
-  "sections": [ ...下記のいずれかのフォーマット... ],
-  "analysis": { ...meetingTypeが"1on1"の場合のみ... }
-}
+■ meetingTypeが"1on1"の場合
+{"meetingType":"1on1","goal":["..."],"voice":["..."],"action":["..."],"follow":["..."],"analysis":{"self":<数値>,"other":<数値>,"listening":<数値>,"comment":"...","open":<数値>}}
+- goal：今日のゴール／voice：本人の声／action：アクション／follow：フォロー事項
 
-■ meetingTypeが"1on1"の場合のsections:
-[
-  {"key":"goal","label":"今日のゴール","emoji":"🎯","items":["..."]},
-  {"key":"voice","label":"本人の声","emoji":"💬","items":["..."]},
-  {"key":"action","label":"アクション","emoji":"✅","items":["..."]},
-  {"key":"follow","label":"フォロー事項","emoji":"📅","items":["..."]}
-]
+■ meetingTypeが"group"の場合（analysisは出力しない）
+{"meetingType":"group","purpose":["..."],"decisions":["..."],"todos":["<担当者名>：<タスク内容>（期日：<期日、不明なら未定>）"],"pending":["..."]}
+- purpose：目的・アジェンダ／decisions：主な決定事項／todos：担当者ごとのToDo／pending：保留事項・継続協議テーマ
 
-■ meetingTypeが"group"の場合のsections:
-[
-  {"key":"purpose","label":"目的・アジェンダ","emoji":"🎯","items":["..."]},
-  {"key":"decisions","label":"主な決定事項","emoji":"✅","items":["..."]},
-  {"key":"todos","label":"担当者ごとのToDo","emoji":"📋","items":["<担当者名>：<タスク内容>（期日：<期日、不明なら未定>）", "..."]},
-  {"key":"pending","label":"保留事項・継続協議テーマ","emoji":"⏳","items":["..."]}
-]
+【各項目共通】${itemCountRule_(transcriptLength)}情報がない場合は["特になし"]
 
-【sections共通】${itemCountRule_(transcriptLength)}情報がない場合は["特になし"]
-
-【analysis】（1on1の場合のみ）
-{
-  "speakingRatio":{"self":<進行役の発話割合(数値0-100)>,"other":<相手の発話割合(数値0-100)>},
-  "listeningScore":<傾聴度スコア(数値0-100)>,
-  "listeningComment":"<傾聴度についての一言コメント（30文字程度）>",
-  "openQuestionRatio":<オープンクエスチョンの割合(数値0-100)>
-}
-- speakingRatio: self+other=100になるようにしてください。
-- listeningScore: 相手の発言を受けて深掘りする質問ができているか、話を遮っていないか等から算出。
-- openQuestionRatio: 「はい/いいえ」で終わる質問ではなく、「なぜ」「どう思う」等の深掘りする質問の割合。
+【analysis】（1on1の場合のみ。いずれも0〜100の数値）
+- self：進行役の発話割合、other：相手の発話割合（self+other=100）
+- listening：傾聴度スコア。相手の発言を受けて深掘りする質問ができているか、話を遮っていないか等から算出
+- comment：傾聴度についての一言コメント（30文字程度）
+- open：オープンクエスチョンの割合。「はい/いいえ」で終わる質問ではなく、「なぜ」「どう思う」等の深掘りする質問の割合
 - いずれも文字起こしのみからの推定であることを前提に、妥当な数値を出してください。`;
 }
-
 // 要約の各項目に入れる個数の目安。以前は長さに関係なく「各2〜4項目」だったため、
 // 1時間ほどの会議では決定事項やToDoが抜けやすかった。長い文字起こしほど多く書かせる。
 function itemCountRule_(transcriptLength) {
@@ -1345,4 +1475,114 @@ function checkPasscodeSetting() {
   const v = prop_("APP_PASSCODE").trim();
   if (!v) console.log("✗ APP_PASSCODE が未設定です。この状態ではアプリが使えません。");
   else console.log("✓ APP_PASSCODE は設定済みです（" + v.length + "文字）");
+}
+
+// ================================================================
+// 計測（要約1件ごとの所要時間を「計測」シートに残す）
+// ================================================================
+// どこで時間がかかっているか（ムラの原因）を数字で確かめるため、要約1件ごとに秒数を記録する。
+// 要約の結果を返すのを遅らせないよう、その場ではキャッシュにためておき、1分おきの定期実行
+// （runPendingJobs）がまとめてシートに書く。
+const TIMING_SHEET = "計測";
+const TIMING_HEADERS = ["日時", "ID", "経路", "文字数", "モデル", "設定", "保存・順番待ち(秒)", "AI(秒)", "AI呼び出し回数", "混雑で待った(秒)", "この処理の合計(秒)", "押してから完了まで(秒)", "結果"];
+const TIMING_CACHE_KEY = "timings";
+
+// AIの呼び出しが終わった直後に作る
+function makeTiming_(id, route, chars, startedAt, waitMs, aiStartedAt) {
+  return {
+    id, route, chars, startedAt, waitMs,
+    aiMs: Date.now() - aiStartedAt,
+    calls: aiStats_.calls,
+    sleptMs: aiStats_.sleptMs,
+    config: aiStats_.config,
+    model: geminiModel()
+  };
+}
+
+// 結果を書き込んだときに、ロックの中で呼ぶ（キャッシュの読み書きが重ならないように）
+function recordTiming_(t, values, result) {
+  if (!t) return;
+  try {
+    const sec = ms => Math.round(ms / 100) / 10;
+    const now = Date.now();
+    // 「押してから」は受け付けたばかりの記録だけ（やり直しなど、日時が古い記録は空にする）
+    const pressed = recordMillis_(values[COL.DATE - 1]);
+    const sincePressed = pressed && now - pressed < 60 * 60 * 1000 ? sec(now - pressed) : "";
+    const row = [
+      Utilities.formatDate(new Date(now), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss"),
+      t.id, t.route, t.chars, t.model, t.config,
+      sec(t.waitMs), sec(t.aiMs), t.calls, sec(t.sleptMs), sec(now - t.startedAt), sincePressed, result
+    ];
+    const cache = CacheService.getScriptCache();
+    const list = JSON.parse(cache.get(TIMING_CACHE_KEY) || "[]");
+    list.push(row);
+    cache.put(TIMING_CACHE_KEY, JSON.stringify(list.slice(-200)), 6 * 60 * 60);
+  } catch (e) {
+    console.warn("[計測] 記録できませんでした:", e.message);
+  }
+}
+
+function flushTimings_() {
+  try {
+    const cache = CacheService.getScriptCache();
+    if (!cache.get(TIMING_CACHE_KEY)) return;
+    withLock_(() => {
+      const list = JSON.parse(cache.get(TIMING_CACHE_KEY) || "[]");
+      if (list.length) {
+        const sheet = SS().getSheetByName(TIMING_SHEET) || createTimingSheet_();
+        sheet.getRange(sheet.getLastRow() + 1, 1, list.length, TIMING_HEADERS.length).setValues(list);
+      }
+      cache.remove(TIMING_CACHE_KEY);
+    }, 5000);
+  } catch (e) {
+    console.warn("[計測] シートに書けませんでした（次回に再実行）:", e.message);
+  }
+}
+
+function createTimingSheet_() {
+  const sheet = SS().insertSheet(TIMING_SHEET);
+  sheet.getRange(1, 1, 1, TIMING_HEADERS.length).setValues([TIMING_HEADERS]).setFontWeight("bold").setBackground("#E8EAF6");
+  sheet.setFrozenRows(1);
+  return sheet;
+}
+
+// ================================================================
+// 考える量ごとの速さの比較（Apps Scriptエディタから手動実行）
+// ================================================================
+// 同じ例文を、考える量（minimal・low）を変えて2回ずつ要約し、かかった時間と結果を表示する。
+// minimal の方が速く、要約の中身にも問題がなければ、スクリプトプロパティ
+// GEMINI_THINKING_LEVEL に minimal を設定する。AIを4回呼ぶ（無料枠の回数を少し使う）。
+// 記録は作らない。
+const SAMPLE_TRANSCRIPT = [
+  "今日は来期の役割について話したいと思います。最近の仕事はどうですか。",
+  "そうですね、資料作りが多くて、正直少し負担に感じています。お客様との打ち合わせにはもっと出たいです。",
+  "なるほど。打ち合わせではどんな役割を担当したいですか。",
+  "説明役をやってみたいです。製品のことはだいぶ分かってきたので。",
+  "いいですね。では次の案件で冒頭の説明を任せます。資料作りは集計のテンプレートを一緒に作って、時間を減らしましょう。",
+  "ありがとうございます。テンプレートは水曜の15時からでどうでしょうか。",
+  "大丈夫です。来月の面談で、説明役をやってみてどうだったかを聞かせてください。"
+].join("\n");
+
+function testThinkingLevels() {
+  let auth;
+  try {
+    auth = getGeminiAuth();
+  } catch (e) {
+    console.log("✗ 設定エラー:", e.message);
+    return;
+  }
+  console.log("モデル:", geminiModel(), "／今の設定:", thinkingLevel_());
+  ["minimal", "low"].forEach(level => {
+    for (let i = 1; i <= 2; i++) {
+      const t0 = Date.now();
+      try {
+        const s = callGeminiSummarize(SAMPLE_TRANSCRIPT, auth, RETRY_POLICY_SYNC, "", level);
+        console.log(level + " " + i + "回目: " + ((Date.now() - t0) / 1000).toFixed(1) + "秒（" + aiStats_.config + "、呼び出し" + aiStats_.calls + "回）→ " +
+          s.meetingType + "／" + s.sections.map(x => x.label + ":" + x.items.join("・")).join(" ｜ "));
+      } catch (e) {
+        console.log(level + " " + i + "回目: 失敗 → " + e.message);
+      }
+    }
+  });
+  console.log("※ 設定が「考える量:low」と表示された minimal の回は、このモデルが minimal を受け付けなかったことを表します");
 }
