@@ -46,6 +46,10 @@ URL: https://skgroup-dx.github.io/voicememo-ai/
 
 \- 履歴一覧から文字起こし本文を外して軽量化、検索をGAS側で全件に対して行う
 
+- 種類（1on1／会議）を直して要約し直す、編集で項目の追加・削除、電波がないときの送信待ち（自動送信）を追加
+
+- テストを tests/ に置き、pushのたびにGitHub Actionsで実行する
+
 
 
 \## 変更時のお願い
@@ -59,7 +63,9 @@ URL: https://skgroup-dx.github.io/voicememo-ai/
 
 \- 起動 → 状況把握 → 修正依頼 → 差分確認 → ローカルテスト → コミット → push → 実機確認、の順で進める
 
-\- git commitは自動許可(都度確認は不要)
+\- ローカルテストは `node tests/run_all.js`（画面の構文チェックとGASの動きの確認）。画面を変えたら sw.js の CACHE_NAME の番号を上げる
+
+- git commitは自動許可(都度確認は不要)
 
 \- git pushは必ず都度確認を取ってから実行する
 

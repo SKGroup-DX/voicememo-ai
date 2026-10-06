@@ -349,6 +349,7 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
   "user": ["0 0 448 512", "<path d=\"M224 248a120 120 0 1 0 0-240 120 120 0 1 0 0 240zm-29.7 56C95.8 304 16 383.8 16 482.3 16 498.7 29.3 512 45.7 512l356.6 0c16.4 0 29.7-13.3 29.7-29.7 0-98.5-79.8-178.3-178.3-178.3l-59.4 0z\"/>"],
   "wand-magic-sparkles": ["0 0 576 512", "<path d=\"M263.4-27L278.2 9.8 315 24.6c3 1.2 5 4.2 5 7.4s-2 6.2-5 7.4L278.2 54.2 263.4 91c-1.2 3-4.2 5-7.4 5s-6.2-2-7.4-5L233.8 54.2 197 39.4c-3-1.2-5-4.2-5-7.4s2-6.2 5-7.4L233.8 9.8 248.6-27c1.2-3 4.2-5 7.4-5s6.2 2 7.4 5zM110.7 41.7l21.5 50.1 50.1 21.5c5.9 2.5 9.7 8.3 9.7 14.7s-3.8 12.2-9.7 14.7l-50.1 21.5-21.5 50.1c-2.5 5.9-8.3 9.7-14.7 9.7s-12.2-3.8-14.7-9.7L59.8 164.2 9.7 142.7C3.8 140.2 0 134.4 0 128s3.8-12.2 9.7-14.7L59.8 91.8 81.3 41.7C83.8 35.8 89.6 32 96 32s12.2 3.8 14.7 9.7zM464 304c6.4 0 12.2 3.8 14.7 9.7l21.5 50.1 50.1 21.5c5.9 2.5 9.7 8.3 9.7 14.7s-3.8 12.2-9.7 14.7l-50.1 21.5-21.5 50.1c-2.5 5.9-8.3 9.7-14.7 9.7s-12.2-3.8-14.7-9.7l-21.5-50.1-50.1-21.5c-5.9-2.5-9.7-8.3-9.7-14.7s3.8-12.2 9.7-14.7l50.1-21.5 21.5-50.1c2.5-5.9 8.3-9.7 14.7-9.7zM460 0c11 0 21.6 4.4 29.5 12.2l42.3 42.3C539.6 62.4 544 73 544 84s-4.4 21.6-12.2 29.5l-88.2 88.2-101.3-101.3 88.2-88.2C438.4 4.4 449 0 460 0zM44.2 398.5L308.4 134.3 409.7 235.6 145.5 499.8C137.6 507.6 127 512 116 512s-21.6-4.4-29.5-12.2L44.2 457.5C36.4 449.6 32 439 32 428s4.4-21.6 12.2-29.5z\"/>"],
   "wifi-slash": ["0 0 576 512", "<path d=\"M288 96c-90.9 0-173.2 36-233.7 94.6-12.7 12.3-33 12-45.2-.7s-12-33 .7-45.2C81.7 74.9 179.9 32 288 32S494.3 74.9 566.3 144.7c12.7 12.3 13 32.6 .7 45.2s-32.6 13-45.2 .7C461.2 132 378.9 96 288 96zM240 432a48 48 0 1 1 96 0 48 48 0 1 1 -96 0zM168 326.2c-11.7 13.3-31.9 14.5-45.2 2.8s-14.5-31.9-2.8-45.2C161 237.4 221.1 208 288 208s127 29.4 168 75.8c11.7 13.3 10.4 33.5-2.8 45.2s-33.5 10.4-45.2-2.8C378.6 292.9 335.8 272 288 272s-90.6 20.9-120 54.2z\"/>"],
+  "plus": ["0 0 24 24", "<path d=\"M11 4h2v7h7v2h-7v7h-2v-7H4v-2h7z\"/>"],
   "xmark": ["0 0 384 512", "<path d=\"M55.1 73.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L147.2 256 9.9 393.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192.5 301.3 329.9 438.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L237.8 256 375.1 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L192.5 210.7 55.1 73.4z\"/>"],
   "bars": ["0 0 448 512", "<path d=\"M0 96C0 78.3 14.3 64 32 64l384 0c17.7 0 32 14.3 32 32s-14.3 32-32 32L32 128C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32l384 0c17.7 0 32 14.3 32 32s-14.3 32-32 32L32 288c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32L32 448c-17.7 0-32-14.3-32-32s14.3-32 32-32l384 0c17.7 0 32 14.3 32 32z\"/>"],
 }</script>
@@ -1092,9 +1093,16 @@ function SummaryModal({
   item,
   onClose,
   onSaved,
-  onDelete
+  onDelete,
+  onRequeued
 }) {
   const [editing, setEditing] = useState(false);
+  // 編集で追加した項目に、すぐ入力できるようにする
+  const [focusNew, setFocusNew] = useState(null);
+  // 種類を直して要約し直す：確認の表示中か・送信中か
+  const [retypeConfirm, setRetypeConfirm] = useState(false);
+  const [retyping, setRetyping] = useState(false);
+  const sharingRef = useRef(false);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [draft, setDraft] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -1125,7 +1133,29 @@ function SummaryModal({
   const analysis = item.sections?.analysis || null;
   const startEdit = () => {
     setDraft(deepCopy(item.sections));
+    setFocusNew(null);
+    setRetypeConfirm(false);
     setEditing(true);
+  };
+  // 編集中の項目の書き換え・追加・削除（変わった見出しの中だけを差し替える）
+  const editItems = (si, fn) => setDraft(d => ({
+    ...d,
+    sections: d.sections.map((s, i) => i !== si ? s : {
+      ...s,
+      items: fn(s.items || [])
+    })
+  }));
+  const addItem = si => {
+    const n = (draft?.sections?.[si]?.items || []).length;
+    editItems(si, items => [...items, ""]);
+    setFocusNew({
+      si,
+      ii: n
+    });
+  };
+  const removeItem = (si, ii) => {
+    setFocusNew(null);
+    editItems(si, items => items.filter((_, j) => j !== ii));
   };
   const cancelEdit = () => {
     setDraft(null);
@@ -1155,10 +1185,10 @@ function SummaryModal({
   // コピー・共有する文章。画面と同じく絵文字は使わず、見出しは【】で囲む
   const buildText = () => {
     const t = `${item.member}${item.interviewee ? " → " + item.interviewee : ""}`;
-    const kind = item.sections?.meetingType === "group" ? "会議" : "1on1";
     const d = parseRecDate(item.date);
     const when = d ? `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")} ${hhmm(d)}` : String(item.date || "");
-    let lines = [`【${kind}】${t}`, `日時：${when}`, ""];
+    // 種類が分からない記録は、画面と同じく種類を書かない
+    let lines = [`${kind ? `【${kind}】` : ""}${t}`, `日時：${when}`, ""];
     secs.forEach(s => {
       lines.push(`■${s.label}`);
       (s.items || []).forEach(i => lines.push(`  ・${i}`));
@@ -1178,16 +1208,21 @@ function SummaryModal({
   // iPhoneの共有メニューから、LINE・メールなどへ直接送る（使えない環境ではボタンを出さない）
   const canShare = typeof navigator.share === "function";
   const doShare = async () => {
+    // 共有メニューが開いている間に押し直しても、2つ目は開かない（エラーも出さない）
+    if (sharingRef.current) return;
+    sharingRef.current = true;
     try {
       await navigator.share({
         text: buildText()
       });
     } catch (e) {
-      // 共有メニューを閉じただけ（AbortError）なら何もしない
-      if (e && e.name !== "AbortError") {
+      // 共有メニューを閉じただけ（AbortError）・すでに開いている（InvalidStateError）なら何もしない
+      if (e && e.name !== "AbortError" && e.name !== "InvalidStateError") {
         setMsg("共有できませんでした");
         setTimeout(() => setMsg(""), 2500);
       }
+    } finally {
+      sharingRef.current = false;
     }
   };
   // 保存中・編集中は、背景のタップで閉じない（保存の途中で閉じたり、書きかけの修正を失わないように）
@@ -1196,8 +1231,33 @@ function SummaryModal({
     if (fromBackdrop && editing) return;
     onClose();
   };
-  const dispSecs = editing ? draft?.sections || [] : secs;
+  // 要約中・失敗した記録は、前の要約（要約し直す前のもの）を出さずに状況だけを出す
+  const pending = ["queued", "processing"].includes(item.status);
+  const failed = item.status === "error";
+  const showSecs = editing || !pending && !failed;
+  const dispSecs = !showSecs ? [] : editing ? draft?.sections || [] : secs;
   const kind = item.sections?.meetingType === "group" ? "会議" : item.sections?.meetingType === "1on1" ? "1on1" : "";
+  // AIの判定した種類（1on1／会議）が違うときに、もう一方として要約し直す
+  const otherType = item.sections?.meetingType === "group" ? "1on1" : "group";
+  const otherKind = otherType === "group" ? "会議" : "1on1";
+  const canRetype = !!onRequeued && !!item.id && item.status === "done" && hasTranscript && !!kind && !editing;
+  const doRetype = async () => {
+    setRetyping(true);
+    try {
+      const res = await gasPost({
+        action: "resummarizeRecord",
+        id: item.id,
+        meetingType: otherType
+      });
+      if (!res.success) throw new Error(res.error || "送信できませんでした");
+      setRetypeConfirm(false);
+      onRequeued(item.id);
+    } catch (e) {
+      setMsg("要約し直しの送信に失敗しました: " + e.message);
+      setTimeout(() => setMsg(""), 6000);
+    }
+    setRetyping(false);
+  };
   const copied = msg === "コピーしました";
   // コピー・編集・キャンセルは同じ控えめな形にそろえ、保存だけを青にする
   const quietBtn = {
@@ -1318,7 +1378,7 @@ function SummaryModal({
     n: "xmark",
     size: 14,
     color: C.text2
-  }))), secs.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }))), showSecs && secs.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 8,
@@ -1370,14 +1430,14 @@ function SummaryModal({
       flex: 1,
       borderTop: `1px solid ${C.sep}`
     }
-  }, !editing && secs.length === 0 && /*#__PURE__*/React.createElement("p", {
+  }, !editing && (secs.length === 0 || pending || failed) && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 14,
       lineHeight: 1.7,
-      color: item.status === "error" ? C.red : C.text2,
+      color: failed ? C.red : C.text2,
       padding: "16px 0"
     }
-  }, item.status === "error" ? "要約できませんでした。履歴の［再試行］でやり直せます。" + (item.processError ? "（" + item.processError + "）" : "") : "要約しています…"), dispSecs.map((sec, si) => /*#__PURE__*/React.createElement("div", {
+  }, failed ? "要約できませんでした。履歴の［再試行］でやり直せます。" + (item.processError ? "（" + item.processError + "）" : "") : "要約しています…"), dispSecs.map((sec, si) => /*#__PURE__*/React.createElement("div", {
     key: sec.key || si,
     style: {
       background: C.bg,
@@ -1387,24 +1447,28 @@ function SummaryModal({
     }
   }, /*#__PURE__*/React.createElement("p", {
     style: heading(true)
-  }, sec.label), (sec.items || []).map((it, ii) => editing ? /*#__PURE__*/React.createElement("textarea", {
+  }, sec.label), (sec.items || []).map((it, ii) => editing ? /*#__PURE__*/React.createElement("div", {
     key: ii,
+    style: {
+      display: "flex",
+      alignItems: "flex-start",
+      gap: 2,
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("textarea", {
     value: it,
+    autoFocus: !!focusNew && focusNew.si === si && focusNew.ii === ii,
+    "aria-label": `${sec.label}の${ii + 1}つ目`,
     onChange: e => {
       // 1文字ごとに要約全体を複製しないよう、変わった項目だけを差し替える
       const v = e.target.value;
-      setDraft(d => ({
-        ...d,
-        sections: d.sections.map((s, i) => i !== si ? s : {
-          ...s,
-          items: s.items.map((x, j) => j === ii ? v : x)
-        })
-      }));
+      editItems(si, items => items.map((x, j) => j === ii ? v : x));
     },
-    // 16pxの文字で1行におよそ16文字入る（短めに見積もり、長い項目が切れて見えないようにする）
-    rows: Math.max(1, Math.ceil(it.length / 16)),
+    // 16pxの文字で1行におよそ15文字入る（短めに見積もり、長い項目が切れて見えないようにする）
+    rows: Math.max(1, Math.ceil(it.length / 15)),
     style: {
-      width: "100%",
+      flex: 1,
+      minWidth: 0,
       background: C.surface,
       border: `1px solid ${C.sep}`,
       borderRadius: 8,
@@ -1416,11 +1480,28 @@ function SummaryModal({
       resize: "none",
       fontFamily: "inherit",
       outline: "none",
-      marginBottom: 6,
       WebkitUserSelect: "text",
       userSelect: "text"
     }
-  }) : /*#__PURE__*/React.createElement("div", {
+  }), /*#__PURE__*/React.createElement("button", {
+    "aria-label": `${sec.label}の${ii + 1}つ目を削除`,
+    onClick: () => removeItem(si, ii),
+    style: {
+      width: 36,
+      height: 40,
+      flexShrink: 0,
+      background: "none",
+      border: "none",
+      cursor: "pointer",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center"
+    }
+  }, /*#__PURE__*/React.createElement(Ic, {
+    n: "xmark",
+    size: 13,
+    color: C.text2
+  }))) : /*#__PURE__*/React.createElement("div", {
     key: ii,
     style: {
       display: "flex",
@@ -1443,7 +1524,25 @@ function SummaryModal({
       marginTop: 10,
       flexShrink: 0
     }
-  }), /*#__PURE__*/React.createElement("span", null, it))))), analysis && !editing && /*#__PURE__*/React.createElement("div", {
+  }), /*#__PURE__*/React.createElement("span", null, it))), editing && /*#__PURE__*/React.createElement("button", {
+    onClick: () => addItem(si),
+    style: {
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 5,
+      padding: "8px 2px",
+      background: "none",
+      border: "none",
+      fontSize: 14,
+      fontWeight: 600,
+      color: C.blue,
+      cursor: "pointer"
+    }
+  }, /*#__PURE__*/React.createElement(Ic, {
+    n: "plus",
+    size: 13,
+    color: C.blue
+  }), "項目を追加"))), analysis && showSecs && !editing && /*#__PURE__*/React.createElement("div", {
     style: divider
   }, /*#__PURE__*/React.createElement("p", {
     style: heading(false)
@@ -1540,7 +1639,61 @@ function SummaryModal({
       lineHeight: 1.6,
       marginTop: 10
     }
-  }, analysis.listeningComment)), hasTranscript && !editing && /*#__PURE__*/React.createElement("div", {
+  }, analysis.listeningComment)), canRetype && /*#__PURE__*/React.createElement("div", {
+    style: divider
+  }, retypeConfirm ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: "14px 0 2px"
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 14,
+      color: C.text,
+      lineHeight: 1.6
+    }
+  }, otherKind, "として要約し直しますか？今の要約（編集した内容も）は新しい要約に置き換わります。"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setRetypeConfirm(false),
+    disabled: retyping,
+    style: quietBtn
+  }, "やめる"), /*#__PURE__*/React.createElement("button", {
+    onClick: doRetype,
+    disabled: retyping,
+    style: {
+      ...quietBtn,
+      background: retyping ? `${C.blue}80` : C.blue,
+      color: "#fff"
+    }
+  }, retyping ? "送信中…" : "要約し直す"))) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 8,
+      padding: "8px 0 0"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 13,
+      color: C.text2
+    }
+  }, "種類：", kind), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setRetypeConfirm(true),
+    style: {
+      background: "none",
+      border: "none",
+      padding: "10px 0 10px 12px",
+      fontSize: 14,
+      fontWeight: 600,
+      color: C.blue,
+      cursor: "pointer"
+    }
+  }, otherKind, "として要約し直す"))), hasTranscript && !editing && /*#__PURE__*/React.createElement("div", {
     style: divider
   }, /*#__PURE__*/React.createElement("button", {
     onClick: toggleTranscript,
@@ -1607,11 +1760,53 @@ const HOME_RECENT_COUNT = 3;
 // 備えて約10分（120回）で打ち切る。
 const POLL_INTERVAL_MS = 5000;
 const POLL_MAX_COUNT = 120;
+// アプリが画面に戻ってきたとき（ホーム画面から開き直した・画面のロックを解除したなど）に呼ぶ。
+// iPhoneでは裏に回ったアプリのタイマーが止まるため、戻ったときに最新を取り直す。
+// minHiddenMs より短い間しか離れていなければ呼ばない。
+function useOnResume(callback, minHiddenMs = 0) {
+  const cbRef = useRef(callback);
+  cbRef.current = callback;
+  useEffect(() => {
+    let hiddenAt = document.visibilityState === "hidden" ? Date.now() : 0;
+    const on = () => {
+      if (document.visibilityState === "hidden") {
+        if (!hiddenAt) hiddenAt = Date.now();
+        return;
+      }
+      if (hiddenAt && Date.now() - hiddenAt >= minHiddenMs) cbRef.current();
+      hiddenAt = 0;
+    };
+    document.addEventListener("visibilitychange", on);
+    return () => document.removeEventListener("visibilitychange", on);
+  }, [minHiddenMs]);
+}
+// 要約待ちに戻した記録の要約を、定期実行を待たずにその場で始めてもらう（ホームの「要約する」と
+// 同じ）。応答が届かなくても定期実行が拾い、結果は状況確認でも反映される。
+function kickProcess(id, setList) {
+  gasPost({
+    action: "processRecord",
+    id
+  }, 120000).then(r => {
+    if (r && r.status === "done") {
+      setList(prev => prev.map(x => x.id === id ? {
+        ...x,
+        status: "done",
+        processError: "",
+        sections: normalizeSections(r.sections)
+      } : x));
+    }
+  }).catch(() => {});
+}
 function useStatusPolling(list, setList) {
   const pendingIds = list.filter(r => ["queued", "processing"].includes(r.status)).map(r => r.id).join(",");
   const [tick, setTick] = useState(0);
   const countRef = useRef(0);
   const prevIdsRef = useRef("");
+  // 裏に回っている間は確認が止まり、10分で打ち切った後も、画面に戻ったらすぐ確認し直す
+  useOnResume(() => {
+    countRef.current = 0;
+    setTick(n => n + 1);
+  });
   useEffect(() => {
     const prev = new Set(prevIdsRef.current.split(",").filter(Boolean));
     if (pendingIds.split(",").some(id => id && !prev.has(id))) countRef.current = 0;
@@ -1656,6 +1851,35 @@ function useStatusPolling(list, setList) {
     }, POLL_INTERVAL_MS);
     return () => clearTimeout(t);
   }, [pendingIds, tick]);
+}
+// ── 電波がないときの送信待ち ──
+// 送れなかった文字起こしは端末に保存しておき、通信できるようになったら自動で送る
+// （アプリを開いたとき・画面に戻ったとき・電波が戻ったとき・開いている間は30秒おき）。
+// 記録の番号は保存したときのものを使うので、送り直しても2件にならない。
+// 記録の日時は「要約する」を押したときにする（GASは7日以内の日時だけ受け付ける）。
+const OUTBOX_KEY = "vm_outbox";
+const OUTBOX_MAX = 10;
+const OUTBOX_RETRY_MS = 30000;
+function outboxGet() {
+  try {
+    const v = JSON.parse(localStorage.getItem(OUTBOX_KEY) || "[]");
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+function outboxSet(list) {
+  try {
+    if (list.length) localStorage.setItem(OUTBOX_KEY, JSON.stringify(list));else localStorage.removeItem(OUTBOX_KEY);
+    return true;
+  } catch {
+    return false;
+  }
+}
+// 端末の時刻での「yyyy-MM-dd HH:mm:ss」
+function localDateTime(d) {
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 // 過去に入力された相手の名前を、新しい順・重複なしで並べる（入力候補として出す）
 function uniqueNames(names) {
@@ -1780,6 +2004,10 @@ function HomeScreen({ member, active, onShowHistory }) {
   const [nameFocused, setNameFocused] = useState(false);
   const blurTimerRef = useRef(null);
   const [error, setError] = useState(null);
+  // 電波がなくて送れず、端末に保存してある文字起こし
+  const [outbox, setOutbox] = useState(outboxGet);
+  const [flushing, setFlushing] = useState(false);
+  const flushingRef = useRef(false);
   // 直前に受け付けた記録。ホーム上部の案内を、その記録の進み具合（要約中→完了／失敗）に合わせて切り替える
   const [noticeId, setNoticeId] = useState(null);
   // 送信中・送信に失敗した内容の記録番号。内容を変えたら新しい番号にする
@@ -1828,6 +2056,69 @@ function HomeScreen({ member, active, onShowHistory }) {
     histCacheSet(member, [...added, ...c.records.map(r => byId.get(r.id) || r)], (c.total || 0) + added.length);
   }, [recentRecs]);
   useStatusPolling(recentRecs, setRecentRecs);
+  // 送信待ちの文字起こしを、古いものから順に送る。通信できなければそこでやめて次の機会に回す。
+  // 受け付けを断られたもの（送り直しても同じ結果になる）は送信待ちから外し、本文を入力欄に戻す。
+  const flushOutbox = useCallback(async () => {
+    if (flushingRef.current || navigator.onLine === false || !outboxGet().length) return;
+    flushingRef.current = true;
+    setFlushing(true);
+    for (const it of outboxGet()) {
+      let res;
+      try {
+        res = await gasPost({
+          action: "submitTranscript",
+          id: it.id,
+          member: it.member,
+          interviewee: it.interviewee,
+          transcript: it.transcript,
+          recordedAt: it.recordedAt
+        }, 90000);
+      } catch {
+        break;
+      }
+      const rest = outboxGet().filter(x => x.id !== it.id);
+      outboxSet(rest);
+      setOutbox(rest);
+      if (!res.success) {
+        setError("送信待ちの記録を送れませんでした: " + (res.error || "不明なエラー") + "（本文を入力欄に戻しました）");
+        setTranscript(t => t.trim() ? t : it.transcript);
+        setInterviewee(v => v.trim() ? v : it.interviewee || "");
+        setManualMode(true);
+        continue;
+      }
+      if (it.member !== member) continue;
+      setRecentRecs(prev => [{
+        id: it.id,
+        date: it.recordedAt,
+        member: it.member,
+        interviewee: it.interviewee,
+        status: "processing",
+        sections: null,
+        hasTranscript: true,
+        _localAt: Date.now()
+      }, ...prev.filter(r => r.id !== it.id)].slice(0, HOME_RECENT_COUNT));
+      setNoticeId(it.id);
+      kickProcess(it.id, setRecentRecs);
+    }
+    flushingRef.current = false;
+    setFlushing(false);
+  }, [member]);
+  useEffect(() => {
+    flushOutbox();
+    window.addEventListener("online", flushOutbox);
+    return () => window.removeEventListener("online", flushOutbox);
+  }, [flushOutbox]);
+  // 電波が戻ったことを知らせてくれない場合もあるので、送信待ちがある間は30秒おきにも試す
+  useEffect(() => {
+    if (!outbox.length) return;
+    const t = setInterval(flushOutbox, OUTBOX_RETRY_MS);
+    return () => clearInterval(t);
+  }, [outbox.length, flushOutbox]);
+  // 画面に戻ってきたら、送信待ちを送り、最近の記録を取り直す（30秒以上離れていたとき）
+  useOnResume(() => {
+    flushOutbox();
+    if (active) fetchRecent();
+  }, 30000);
   const noticeRec = noticeId ? recentRecs.find(r => r.id === noticeId) : null;
   const typedName = interviewee.trim();
   const candidates = nameCandidates.filter(n => n !== typedName && (!typedName || n.includes(typedName))).slice(0, 6);
@@ -1852,15 +2143,37 @@ function HomeScreen({ member, active, onShowHistory }) {
       setError("貼り付けできませんでした。欄を長押しして「ペースト」を選んでください。");
     }
   };
+  // 送れなかった内容を送信待ちとして端末に保存し、入力欄を空にする（保存できなければ false）
+  const queueForLater = (recId, pressedAt) => {
+    const items = outboxGet().filter(x => x.id !== recId);
+    if (items.length >= OUTBOX_MAX) return false;
+    items.push({
+      id: recId,
+      member,
+      interviewee: typedName,
+      transcript: trimmed,
+      recordedAt: localDateTime(pressedAt)
+    });
+    if (!outboxSet(items)) return false;
+    setOutbox(items);
+    if (typedName) setNameCandidates(prev => uniqueNames([typedName, ...prev]));
+    setTranscript("");
+    setManualMode(false);
+    setInterviewee("");
+    return true;
+  };
   const handleSubmit = async () => {
     if (!canSubmit) return;
     setError(null);
     setNoticeId(null);
-    setSubmitting(true);
     let accepted;
     // 同じ内容を送り直す間は同じ番号を使う（エラー後に押し直しても2件にならない）
     if (!submitIdRef.current) submitIdRef.current = newRecordId();
     const recId = submitIdRef.current;
+    const pressedAt = new Date();
+    // 電波がないと分かっているときは、送らずにすぐ送信待ちにする
+    if (navigator.onLine === false && queueForLater(recId, pressedAt)) return;
+    setSubmitting(true);
     // 要約開始は、受け付けの返事を待たずに同時に送る（Google側の待ち時間を1回分減らす）。
     // 先に着いた場合、GASは受け付けの保存を少し待ってから要約する。応答が届かなくても、
     // 受け付け済みの記録は1分おきの定期実行が要約する。開いたままなら結果を反映する。
@@ -1925,6 +2238,11 @@ function HomeScreen({ member, active, onShowHistory }) {
       if (!accepted) {
         clearTimeout(slowTimer);
         setSlowSending(false);
+        // 通信できなかった・時間切れのときは、送信待ちにして後で自動で送る
+        if ((e.isTimeout || e.retryable) && queueForLater(recId, pressedAt)) {
+          setSubmitting(false);
+          return;
+        }
         let msg = e.message || "不明なエラー";
         if (e.isTimeout || e.retryable) {
           msg = navigator.onLine === false ? "オフラインです。電波の良いところで、もう一度「要約する」を押してください（押し直しても2件にはなりません）。" : "サーバーが混み合っていて送れませんでした。少し待って、もう一度「要約する」を押してください（押し直しても2件にはなりません）。";
@@ -2010,7 +2328,55 @@ function HomeScreen({ member, active, onShowHistory }) {
       lineHeight: 1.6,
       color: C.red
     }
-  }, error), noticeRec && /*#__PURE__*/React.createElement(SubmitProgress, {
+  }, error), outbox.length > 0 && /*#__PURE__*/React.createElement("div", {
+    role: "status",
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      background: `${C.orange}14`,
+      border: `1px solid ${C.orange}50`,
+      borderRadius: 10,
+      padding: "8px 8px 8px 11px",
+      marginBottom: 10,
+      color: C.text
+    }
+  }, /*#__PURE__*/React.createElement(Ic, {
+    n: flushing ? "spinner" : "wifi-slash",
+    size: 15,
+    color: C.orange,
+    cls: flushing ? "spin" : ""
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 14,
+      fontWeight: 600,
+      lineHeight: 1.5
+    }
+  }, flushing ? "送信待ちを送っています…" : `送信待ち ${outbox.length}件`), !flushing && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.text2,
+      lineHeight: 1.5
+    }
+  }, "通信できるようになったら自動で送ります")), !flushing && /*#__PURE__*/React.createElement("button", {
+    onClick: flushOutbox,
+    style: {
+      flexShrink: 0,
+      padding: "9px 12px",
+      borderRadius: 8,
+      border: `1px solid ${C.sep}`,
+      background: C.surface,
+      fontSize: 13,
+      fontWeight: 600,
+      color: C.blue,
+      cursor: "pointer"
+    }
+  }, "今すぐ送る")), noticeRec && /*#__PURE__*/React.createElement(SubmitProgress, {
     rec: noticeRec,
     onOpen: () => setSelectedRec(noticeRec),
     onShowHistory: onShowHistory,
@@ -2228,6 +2594,14 @@ function HomeScreen({ member, active, onShowHistory }) {
       setSelectedRec(null);
       setDelTarget(item);
     },
+    onRequeued: id => {
+      setRecentRecs(prev => prev.map(r => r.id === id ? {
+        ...r,
+        status: "queued",
+        processError: ""
+      } : r));
+      kickProcess(id, setRecentRecs);
+    },
     onSaved: secs => {
       // 閉じた後に保存が終わった場合は開き直さない
       setSelectedRec(s => s ? {
@@ -2267,7 +2641,7 @@ const HELP_STEPS = [{
   body: "ホームの「タップして貼り付け」→［要約する］。受け付け後はアプリを閉じても大丈夫"
 }, {
   title: "見返す",
-  body: "メニューの「履歴」から。［コピー］［編集］、削除は要約画面のいちばん下"
+  body: "メニューの「履歴」から。［コピー］［共有］［編集］、削除は要約画面のいちばん下"
 }];
 const HELP_SUMMARY_TYPES = [{
   label: "1on1",
@@ -2295,6 +2669,12 @@ const HELP_FAQ = [{
 }, {
   q: "「要約できませんでした」と出た",
   a: "履歴の［再試行］を押してください。多くは一時的な混雑で、少し時間をおけば通ります。"
+}, {
+  q: "1on1と会議を取り違えている",
+  a: "要約画面の下の［会議として要約し直す］（または［1on1として要約し直す］）を押してください。文字起こしが残っている記録だけ直せます。"
+}, {
+  q: "電波がないところで送った",
+  a: "送れなかった内容は端末に保存され、ホームに「送信待ち」と出ます。通信できるようになると自動で送ります（アプリを開いている間）。"
 }, {
   q: "履歴に出てこない",
   a: "履歴は名前ごとに分かれています。メニューの「ログイン中」の名前がいつもと同じか確認してください。"
@@ -2717,6 +3097,16 @@ function HistoryScreen({
     return () => ob.disconnect();
   }, [hasMore, moreLoading, moreError, searchQ, typeFilter]);
   useStatusPolling(records, setRecords);
+  // 5分以上離れてから戻ってきたら、一覧を取り直す（ほかの端末での変更や要約の完了を反映）
+  useOnResume(() => fetchFirst(), 5 * 60 * 1000);
+  const markRequeued = id => {
+    setRecords(prev => prev.map(r => r.id === id ? {
+      ...r,
+      status: "queued",
+      processError: ""
+    } : r));
+    kickProcess(id, setRecords);
+  };
   const doRetry = async item => {
     setRetryingIds(prev => new Set(prev).add(item.id));
     try {
@@ -2725,25 +3115,7 @@ function HistoryScreen({
         id: item.id
       });
       if (!res.success) throw new Error(res.error || "GASエラー");
-      setRecords(prev => prev.map(r => r.id === item.id ? {
-        ...r,
-        status: "queued",
-        processError: ""
-      } : r));
-      // ホームの「要約する」と同じく、定期実行を待たずにその場で要約を始めてもらう
-      // （届かなくても定期実行が拾う。結果は状態確認でも反映される）
-      gasPost({
-        action: "processRecord",
-        id: item.id
-      }, 120000).then(r => {
-        if (r && r.status === "done") {
-          setRecords(prev => prev.map(x => x.id === item.id ? {
-            ...x,
-            status: "done",
-            sections: normalizeSections(r.sections)
-          } : x));
-        }
-      }).catch(() => {});
+      markRequeued(item.id);
     } catch (e) {
       setError("再試行の送信に失敗しました。通信を確認してもう一度お試しください。");
     }
@@ -3077,6 +3449,7 @@ function HistoryScreen({
       setSelected(null);
       setDelTarget(item);
     },
+    onRequeued: markRequeued,
     onSaved: secs => {
       // 閉じた後に保存が終わった場合は開き直さない
       setSelected(s => s ? {

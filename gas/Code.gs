@@ -96,6 +96,8 @@ function doPost(e) {
         result = processRecord(body); break;
       case "retryRecord":
         result = retryRecord(body); break;
+      case "resummarizeRecord":
+        result = resummarizeRecord(body); break;
       case "updateRecord":
         // アプリから変えられるのは要約の中身だけ（状態などは書き換えさせない）
         result = updateSummary(body); break;
@@ -300,7 +302,8 @@ function submitTranscript(body) {
   // 番号が付いていない・形が正しくない場合はこちらで作る。
   const clientId = String(body.id || "");
   const newId    = UUID_PATTERN.test(clientId) ? clientId.toLowerCase() : Utilities.getUuid();
-  const recordDate = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
+  const recordDate = clientRecordedAt_(body.recordedAt) ||
+    Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
 
   return withLock_(() => {
     const sheet = recordsSheet();
@@ -324,6 +327,19 @@ function submitTranscript(body) {
     console.log("[submitTranscript] 受け付け完了 id:", newId);
     return { success: true, id: newId, status: "queued" };
   });
+}
+
+// 電波がなくて端末に保存しておき、後から自動で送った記録は、アプリが「要約する」を
+// 押した日時（端末の時刻、"yyyy-MM-dd HH:mm:ss"）を送ってくる。その日時で記録する。
+// 端末の時計のずれに備え、7日より前・未来（5分以上先）の日時は使わない。
+const CLIENT_DATE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+function clientRecordedAt_(v) {
+  const s = String(v || "");
+  if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) return "";
+  const t = recordMillis_(s);
+  const now = Date.now();
+  if (!t || t > now + 5 * 60 * 1000 || t < now - CLIENT_DATE_MAX_AGE_MS) return "";
+  return s;
 }
 
 // ================================================================
@@ -369,7 +385,7 @@ function processRecord(body) {
   }
   try {
     const t0 = Date.now();
-    const sections = callGeminiSummarize(job.transcript, auth, RETRY_POLICY_SYNC);
+    const sections = callGeminiSummarize(job.transcript, auth, RETRY_POLICY_SYNC, job.forceType);
     console.log("[processRecord] 要約にかかった時間:", ((Date.now() - t0) / 1000).toFixed(1), "秒 ／ 文字数:", job.transcript.length, "／ 種別:", sections.meetingType);
     finishJob_(job, { sections });
     return { success: true, id, status: "done", sections };
@@ -410,7 +426,7 @@ function runPendingJobs() {
       const policy = Object.assign({}, RETRY_POLICY_BACKGROUND, {
         deadline: Math.min(Date.now() + RETRY_POLICY_BACKGROUND.budgetMs, runEnd)
       });
-      const sections = callGeminiSummarize(job.transcript, auth, policy);
+      const sections = callGeminiSummarize(job.transcript, auth, policy, job.forceType);
       const result = finishJob_(job, { sections });
       console.log("[runPendingJobs] 完了 id:", job.id, "（" + result + "）", ((Date.now() - t0) / 1000).toFixed(1) + "秒");
     } catch (e) {
@@ -449,9 +465,12 @@ function claimQueuedRow_(id) {
     sheet.getRange(row, COL.STATUS).setValue("processing");
     const startedCell = sheet.getRange(row, COL.PROCESSING_STARTED_AT);
     startedCell.setValue(new Date());
+    const prevSummary = parseSections(values[COL.SECTIONS - 1]);
     return {
       id: String(values[COL.ID - 1]),
       transcript: rowTranscript(values),
+      // 「種類を直して要約し直す」で指定された種類（無ければAIが判定する）
+      forceType: validMeetingType_(prevSummary && prevSummary.requestedType),
       // シートに入った値を読み直して目印にする（書いた値と読み直した値の微妙な違いで
       // 自分の目印を見失わないように）
       token: toMillis_(startedCell.getValue())
@@ -519,9 +538,49 @@ function retryRecord(body) {
     if (status !== "error") return { success: true, status };
     sheet.getRange(row, COL.STATUS).setValue("queued");
     sheet.getRange(row, COL.PROCESS_ERROR).setValue("");
+    clearReapCount_(id);
     console.log("[retryRecord] 再受け付け完了 id:", id);
     return { success: true, status: "queued" };
   });
+}
+
+// ================================================================
+// 種類（1on1／会議）を直して要約し直す
+// ================================================================
+// AIの判定した種類が違っていたときに、利用者が正しい種類を選んで要約し直す。
+// 指定された種類は要約の列に requestedType として書いておき、要約待ち（queued）に
+// 戻す。あとは通常の要約と同じ流れ（その場での要約・定期実行）で、その種類として
+// 要約する。新しい要約ができるまでは前の要約を残しておく（失敗しても消えないように）。
+function resummarizeRecord(body) {
+  const id = body.id ? String(body.id) : "";
+  const type = validMeetingType_(body.meetingType);
+  if (!id) return { success: false, error: "id required" };
+  if (!type) return { success: false, error: "種類の指定が正しくありません" };
+  return withLock_(() => {
+    const sheet = recordsSheet();
+    const row = findRecordRowById(sheet, id);
+    if (row < 0) return { success: false, error: "記録が見つかりません" };
+    const values = sheet.getRange(row, 1, 1, NUM_COLS).getValues()[0];
+    const status = String(values[COL.STATUS - 1] || "");
+    if (status !== "done" && status !== "error") {
+      return { success: false, error: "要約中です。終わってからもう一度お試しください。" };
+    }
+    if (!rowTranscript(values)) {
+      return { success: false, error: "文字起こしが保存期間を過ぎて削除されているため、要約し直せません。" };
+    }
+    const summary = parseSections(values[COL.SECTIONS - 1]) || {};
+    summary.requestedType = type;
+    sheet.getRange(row, COL.SECTIONS).setValue(JSON.stringify(summary));
+    sheet.getRange(row, COL.STATUS).setValue("queued");
+    sheet.getRange(row, COL.PROCESS_ERROR).setValue("");
+    clearReapCount_(id);
+    console.log("[resummarizeRecord] 種類を指定して要約待ちに戻した id:", id, "種類:", type);
+    return { success: true, status: "queued" };
+  });
+}
+
+function validMeetingType_(v) {
+  return v === "1on1" || v === "group" ? v : "";
 }
 
 // ================================================================
@@ -661,10 +720,11 @@ const SUMMARIZE_FAST_CONFIG = {
 // （一時的な別の原因の400で、ずっと遅い設定のままにならないように）
 const FAST_CONFIG_ERROR_PATTERN = /thinking|response_?mime|mime_?type|generation_?config|unknown name/i;
 
-function callGeminiSummarize(transcript, auth, policy) {
+// forceType: "1on1" | "group" を渡すと、AIに判定させずにその種類として要約する
+function callGeminiSummarize(transcript, auth, policy, forceType) {
   const url = GEMINI_API_BASE + geminiModel() + ":generateContent";
 
-  const prompt = getDefaultSystemPrompt(transcript.length) + "\n\n【文字起こし内容】\n" + transcript;
+  const prompt = getDefaultSystemPrompt(transcript.length, forceType) + "\n\n【文字起こし内容】\n" + transcript;
   const baseConfig = { temperature: 0.3, maxOutputTokens: 32768 };
   const buildPayload = config => ({
     contents: [{ parts: [{ text: prompt }] }],
@@ -702,6 +762,11 @@ function callGeminiSummarize(transcript, auth, policy) {
   } catch (parseErr) {
     console.error("[要約] JSONとして読めない応答:", jsonText.slice(0, 300));
     throw userError_("AIの要約を読み取れませんでした。少し時間をおいて再試行してください。");
+  }
+  // 種類を指定したときは、AIの返した種類にかかわらず指定どおりにする
+  if (forceType && parsed && typeof parsed === "object") {
+    parsed.meetingType = forceType;
+    if (forceType === "group") delete parsed.analysis;
   }
   // 形を確かめて整える（崩れた形のまま保存すると、検索や画面の表示が壊れるため）。
   // 文字起こしはTRANSCRIPT列にあるので、要約には入れない。
@@ -760,12 +825,17 @@ function normalizeSummary_(raw) {
 // 出し分けさせる。「発言比率・傾聴スコア」等の分析は1on1向けの指標なので、
 // 複数人会議と判定された場合はanalysisキー自体を出力させない
 // （アプリ側は analysis が無ければ単に表示しないだけなので、これだけで両対応できる）。
-function getDefaultSystemPrompt(transcriptLength) {
+function getDefaultSystemPrompt(transcriptLength, forceType) {
+  const step1 = forceType
+    ? `【ステップ1：会議種別】
+この録音は、利用者の指定により「${forceType === "1on1" ? "1on1（1対1の面談・個別打ち合わせ）" : "group（複数人が参加する会議）"}」として扱ってください。
+判定はせず、meetingTypeは必ず"${forceType}"にしてください。`
+    : `【ステップ1：会議種別の自動判定】
+発言者の人数や対話スタイル（一対一の対話か、複数人による議論・報告か）から、この録音が
+「1on1（1対1の面談・個別打ち合わせ）」か「group（複数人が参加する会議）」かを判定してください。`;
   return `あなたは優秀な議事録・要約AIです。文字起こしを分析し、以下のステップに従ってください。
 
-【ステップ1：会議種別の自動判定】
-発言者の人数や対話スタイル（一対一の対話か、複数人による議論・報告か）から、この録音が
-「1on1（1対1の面談・個別打ち合わせ）」か「group（複数人が参加する会議）」かを判定してください。
+${step1}
 
 【ステップ2：判定結果に応じた出力】
 以下のJSON形式で出力してください。meetingTypeが"1on1"の場合のみanalysisキーを含め、
@@ -904,11 +974,35 @@ function warmup() {
     console.error("[warmup] error:", e.message);
   }
   reapStaleProcessing();
+  ensurePurgeTrigger_();
+}
+
+// 古い文字起こしの自動削除は、毎日の定期実行（setupTriggersで作る）で動く。GASを更新した
+// ときに setupTriggers の実行を忘れても止まらないよう、無ければここで作る（確認は6時間に1回）。
+function ensurePurgeTrigger_() {
+  try {
+    const cache = CacheService.getScriptCache();
+    if (cache.get("purgeTriggerChecked")) return;
+    const has = ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === "purgeOldTranscripts");
+    if (!has) {
+      ScriptApp.newTrigger("purgeOldTranscripts").timeBased().everyDays(1).atHour(3).create();
+      console.log("[warmup] 文字起こしの自動削除の定期実行が無かったため作りました");
+    }
+    cache.put("purgeTriggerChecked", "1", 6 * 60 * 60);
+  } catch (e) {
+    console.warn("[warmup] 自動削除の定期実行を確認できませんでした:", e.message);
+  }
 }
 
 // 要約中にGASの実行時間上限などで異常終了すると、行が"processing"のまま
 // 取り残されることがある。一定時間"processing"のままの行を"queued"に戻し、
-// 次回の定期実行で拾い直す。読んでから書くまでの間に行がずれないよう、ロックの中で行う。
+// 次回の定期実行で拾い直す。ただし同じ記録が何度も止まる場合は、無料枠を使い続けない
+// よう、戻すのは MAX_REAPS 回までにして、その次は失敗にする（［再試行］でやり直せる）。
+// 読んでから書くまでの間に行がずれないよう、ロックの中で行う。
+const MAX_REAPS = 2;
+const REAP_COUNT_TTL_SEC = 6 * 60 * 60;
+const REAP_GIVE_UP_MESSAGE = "要約が時間内に終わりませんでした。［再試行］でやり直せます（録音が長い場合は分けて送ってください）。";
+
 function reapStaleProcessing() {
   try {
     withLock_(() => {
@@ -917,32 +1011,65 @@ function reapStaleProcessing() {
       if (lastRow <= HEADER_ROW) return;
       const numRows = lastRow - HEADER_ROW;
       const statuses = sheet.getRange(HEADER_ROW + 1, COL.STATUS, numRows, 1).getValues();
+      if (!statuses.some(s => String(s[0]) === "processing")) return;
       const startedAts = sheet.getRange(HEADER_ROW + 1, COL.PROCESSING_STARTED_AT, numRows, 1).getValues();
+      const ids = sheet.getRange(HEADER_ROW + 1, COL.ID, numRows, 1).getValues();
       const thresholdMs = STALE_PROCESSING_MINUTES * 60 * 1000;
       const now = Date.now();
       let reverted = 0;
+      let gaveUp = 0;
       for (let i = 0; i < numRows; i++) {
         if (String(statuses[i][0]) !== "processing") continue;
         const startedMs = toMillis_(startedAts[i][0]);
-        if (!startedMs || now - startedMs > thresholdMs) {
-          sheet.getRange(HEADER_ROW + 1 + i, COL.STATUS).setValue("queued");
+        if (startedMs && now - startedMs <= thresholdMs) continue;
+        const row = HEADER_ROW + 1 + i;
+        if (bumpReapCount_(String(ids[i][0])) > MAX_REAPS) {
+          sheet.getRange(row, COL.STATUS).setValue("error");
+          sheet.getRange(row, COL.PROCESS_ERROR).setValue(REAP_GIVE_UP_MESSAGE);
+          gaveUp++;
+        } else {
+          sheet.getRange(row, COL.STATUS).setValue("queued");
           reverted++;
         }
       }
       if (reverted > 0) console.log("[reapStaleProcessing] " + reverted + "件を再投入しました");
+      if (gaveUp > 0) console.warn("[reapStaleProcessing] 何度も止まった " + gaveUp + "件を失敗にしました");
     });
   } catch (e) {
     console.warn("[reapStaleProcessing] 今回は見送り:", e.message);
   }
 }
 
+// 止まった処理を拾い直した回数（記録ごと・6時間で忘れる）
+function bumpReapCount_(id) {
+  try {
+    const cache = CacheService.getScriptCache();
+    const key = "reaps_" + id;
+    const n = (parseInt(cache.get(key), 10) || 0) + 1;
+    cache.put(key, String(n), REAP_COUNT_TTL_SEC);
+    return n;
+  } catch (e) {
+    return 1;
+  }
+}
+function clearReapCount_(id) {
+  try {
+    CacheService.getScriptCache().remove("reaps_" + id);
+  } catch (e) {}
+}
+
 // ================================================================
 // 古い文字起こしの自動削除（毎日の定期実行）
 // ================================================================
 // 1on1などの機密性に配慮し、一定日数（スクリプトプロパティ TRANSCRIPT_RETENTION_DAYS、
-// 未設定なら90日）を過ぎた記録は、文字起こしの本文だけを消して要約は残す。
-// 0 を設定すると消さない。要約待ち・失敗の記録は、やり直しに本文が要るので消さない。
+// 未設定なら90日。受け付けた日時から数える）を過ぎた記録は、文字起こしの本文だけを
+// 消して要約は残す。0 を設定すると消さない。
+// 要約待ち・要約中の記録は、要約に本文が要るので消さない。失敗した記録は消す。
+// 古い記録には要約の列の中にも文字起こし（_transcript）が残っていることがあるので、それも消す。
+// 対象の行はロックの外で探し、ロックの中では番号（ID）と状態を確かめ直してから消す
+// （本文の列は大きいので、読んでいる間ほかの処理を待たせないように）。
 const DEFAULT_TRANSCRIPT_RETENTION_DAYS = 90;
+const PURGE_STATUSES = ["done", "error"];
 
 function transcriptRetentionDays_() {
   const v = prop_("TRANSCRIPT_RETENTION_DAYS").trim();
@@ -951,31 +1078,54 @@ function transcriptRetentionDays_() {
   return isFinite(n) && n >= 0 ? n : DEFAULT_TRANSCRIPT_RETENTION_DAYS;
 }
 
+// 保存期間を過ぎて、文字起こしを消す（消した）記録か
+function transcriptExpired_(row) {
+  const days = transcriptRetentionDays_();
+  if (!days) return false;
+  if (PURGE_STATUSES.indexOf(String(row[COL.STATUS - 1])) === -1) return false;
+  const t = recordMillis_(row[COL.DATE - 1]);
+  return !!t && t < Date.now() - days * 24 * 60 * 60 * 1000;
+}
+
 function purgeOldTranscripts() {
   const days = transcriptRetentionDays_();
   if (!days) {
     console.log("[purgeOldTranscripts] TRANSCRIPT_RETENTION_DAYS が0のため、消さずに終了");
     return;
   }
-  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  const targets = {};
+  let found = 0;
+  readAllRows().forEach(row => {
+    if (!transcriptExpired_(row)) return;
+    const oldCopy = String(row[COL.SECTIONS - 1] || "").indexOf('"_transcript"') !== -1;
+    if (!row[COL.TRANSCRIPT - 1] && !oldCopy) return;
+    targets[String(row[COL.ID - 1])] = true;
+    found++;
+  });
+  if (!found) return;
   try {
     withLock_(() => {
       const sheet = recordsSheet();
       const lastRow = sheet.getLastRow();
       if (lastRow <= HEADER_ROW) return;
       const n = lastRow - HEADER_ROW;
-      const dates = sheet.getRange(HEADER_ROW + 1, COL.DATE, n, 1).getValues();
+      const ids = sheet.getRange(HEADER_ROW + 1, COL.ID, n, 1).getValues();
       const statuses = sheet.getRange(HEADER_ROW + 1, COL.STATUS, n, 1).getValues();
-      const transcripts = sheet.getRange(HEADER_ROW + 1, COL.TRANSCRIPT, n, 1).getValues();
+      const summaries = sheet.getRange(HEADER_ROW + 1, COL.SECTIONS, n, 1).getValues();
       let purged = 0;
       for (let i = 0; i < n; i++) {
-        if (!transcripts[i][0] || String(statuses[i][0]) !== "done") continue;
-        const t = recordMillis_(dates[i][0]);
-        if (t && t < cutoff) {
-          // 消す行だけを書き換える（列全体を書き戻すと、先頭が - などの本文が数式扱いになるため）
-          sheet.getRange(HEADER_ROW + 1 + i, COL.TRANSCRIPT).setValue("");
-          purged++;
+        if (!targets[String(ids[i][0])]) continue;
+        // 探した後に「要約し直す」などで要約待ちになった記録は消さない
+        if (PURGE_STATUSES.indexOf(String(statuses[i][0])) === -1) continue;
+        const row = HEADER_ROW + 1 + i;
+        // 消す行だけを書き換える（列全体を書き戻すと、先頭が - などの本文が数式扱いになるため）
+        sheet.getRange(row, COL.TRANSCRIPT).setValue("");
+        const summary = parseSections(summaries[i][0]);
+        if (summary && typeof summary === "object" && "_transcript" in summary) {
+          delete summary._transcript;
+          sheet.getRange(row, COL.SECTIONS).setValue(JSON.stringify(summary));
         }
+        purged++;
       }
       if (purged) console.log("[purgeOldTranscripts] " + days + "日より前の記録 " + purged + "件の文字起こしを消しました（要約は残しています）");
     }, 30000);
@@ -1074,11 +1224,13 @@ function parseSections(raw) {
   }
 }
 
-// 古い記録には、要約の中に文字起こし(_transcript)が残っていることがあるので取り除いて返す
+// 古い記録には、要約の中に文字起こし(_transcript)が残っていることがあるので取り除いて返す。
+// 「要約し直す」で指定した種類（requestedType）もアプリには不要なので外す。
 function stripTranscript(sections) {
   if (!sections || typeof sections !== "object") return sections;
   const copy = Object.assign({}, sections);
   delete copy._transcript;
+  delete copy.requestedType;
   return copy;
 }
 
@@ -1092,8 +1244,9 @@ function rowToRecord(row) {
       member:        readText_(row[COL.MEMBER - 1]),
       interviewee:   readText_(row[COL.INTERVIEWEE - 1]),
       sections:      stripTranscript(parseSections(row[COL.SECTIONS - 1])),
-      // 文字起こしの列を読んでいない場合（null）は、あるものとして扱う（受け付け時に必ず保存しているため）
-      hasTranscript: row[COL.TRANSCRIPT - 1] === null ? true : !!rowTranscript(row),
+      // 文字起こしの列を読んでいない場合（null）は、保存期間を過ぎていなければあるものとして扱う
+      // （受け付け時に必ず保存し、消すのは保存期間を過ぎたときだけのため）
+      hasTranscript: row[COL.TRANSCRIPT - 1] === null ? !transcriptExpired_(row) : !!rowTranscript(row),
       status:        String(row[COL.STATUS - 1] || ""),
       processError:  readText_(row[COL.PROCESS_ERROR - 1])
     };
