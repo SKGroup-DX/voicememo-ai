@@ -1881,6 +1881,41 @@ function localDateTime(d) {
   const p = n => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
+// ── 直前に送った内容 ──
+// 送った後もクリップボードには同じ文字起こしが残っているため、貼り付けの枠を押し間違えると
+// 同じ内容がもう一度入り、そのまま送ると記録が2件になる。直前に送った内容（本文そのもの
+// ではなく短い目印）を覚えておき、同じ内容は送れないようにする。24時間で忘れる。
+// その記録を削除したときも忘れる（送り直せるように）。
+const LAST_SENT_KEY = "vm_last_sent";
+const LAST_SENT_TTL_MS = 24 * 60 * 60 * 1000;
+function textMark(s) {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = (h * 33 ^ s.charCodeAt(i)) >>> 0;
+  return s.length + ":" + h.toString(36);
+}
+function lastSentSet(text, id) {
+  try {
+    localStorage.setItem(LAST_SENT_KEY, JSON.stringify({
+      mark: textMark(text),
+      id,
+      at: Date.now()
+    }));
+  } catch {}
+}
+function lastSentIs(text) {
+  try {
+    const v = JSON.parse(localStorage.getItem(LAST_SENT_KEY) || "null");
+    return !!v && Date.now() - v.at < LAST_SENT_TTL_MS && v.mark === textMark(text);
+  } catch {
+    return false;
+  }
+}
+function lastSentForget(id) {
+  try {
+    const v = JSON.parse(localStorage.getItem(LAST_SENT_KEY) || "null");
+    if (v && v.id === id) localStorage.removeItem(LAST_SENT_KEY);
+  } catch {}
+}
 // 過去に入力された相手の名前を、新しい順・重複なしで並べる（入力候補として出す）
 function uniqueNames(names) {
   const seen = new Set();
@@ -2124,7 +2159,9 @@ function HomeScreen({ member, active, onShowHistory }) {
   const candidates = nameCandidates.filter(n => n !== typedName && (!typedName || n.includes(typedName))).slice(0, 6);
   const trimmed = transcript.trim();
   const tooLong = trimmed.length > MAX_TRANSCRIPT_CHARS;
-  const canSubmit = !!trimmed && !tooLong && !submitting;
+  // 直前に送った内容・送信待ちの内容と同じなら送らない
+  const duplicate = !!trimmed && !submitting && (lastSentIs(trimmed) || outbox.some(x => x.transcript === trimmed));
+  const canSubmit = !!trimmed && !tooLong && !submitting && !duplicate;
   const canReadClipboard = !!(navigator.clipboard && navigator.clipboard.readText);
   const pasteFromClipboard = async () => {
     try {
@@ -2135,7 +2172,7 @@ function HomeScreen({ member, active, onShowHistory }) {
       }
       setTranscript(text);
       setManualMode(true);
-      setNoticeId(null);
+      if (!lastSentIs(text.trim())) setNoticeId(null);
       setError(null);
     } catch {
       // 貼り付けを許可されなかった場合などは、手で貼り付ける欄に切り替える
@@ -2156,6 +2193,7 @@ function HomeScreen({ member, active, onShowHistory }) {
     });
     if (!outboxSet(items)) return false;
     setOutbox(items);
+    lastSentSet(trimmed, recId);
     if (typedName) setNameCandidates(prev => uniqueNames([typedName, ...prev]));
     setTranscript("");
     setManualMode(false);
@@ -2272,6 +2310,7 @@ function HomeScreen({ member, active, onShowHistory }) {
     setInterviewee("");
     setSubmitting(false);
     setNoticeId(accepted.id);
+    lastSentSet(trimmed, accepted.id);
   };
   // 画面は「貼り付け前」と「貼り付け後」で切り替える。貼り付け前は大きな貼り付け枠だけ、
   // 貼り付け後に本文・相手・［要約する］を出す（同じ強さのボタンや欄が並んで迷わないように）。
@@ -2381,12 +2420,34 @@ function HomeScreen({ member, active, onShowHistory }) {
     onOpen: () => setSelectedRec(noticeRec),
     onShowHistory: onShowHistory,
     onClose: () => setNoticeId(null)
-  }), !showEditor ? /*#__PURE__*/React.createElement("button", {
+  }), !showEditor && noticeRec ? /*#__PURE__*/React.createElement("button", {
+    // 要約の案内を出している間は、案内を主役にして貼り付けは控えめに（押し間違えないように）。
+    // 案内を×で閉じると、元の大きな枠に戻る。
+    onClick: pasteFromClipboard,
+    style: {
+      alignSelf: "center",
+      marginTop: 6,
+      padding: "12px 16px",
+      background: "none",
+      border: "none",
+      color: C.blue,
+      fontSize: 14,
+      fontWeight: 600,
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 6,
+      cursor: "pointer"
+    }
+  }, /*#__PURE__*/React.createElement(Ic, {
+    n: "clipboard",
+    size: 13,
+    color: C.blue
+  }), "続けて別の録音を貼り付け") : !showEditor ? /*#__PURE__*/React.createElement("button", {
     // 貼り付け前：画面の主役はこの枠ひとつ
     onClick: pasteFromClipboard,
     style: {
       width: "100%",
-      marginTop: noticeRec ? 4 : 8,
+      marginTop: 8,
       padding: "40px 16px",
       borderRadius: 16,
       border: `2px dashed ${C.blue}66`,
@@ -2443,7 +2504,16 @@ function HomeScreen({ member, active, onShowHistory }) {
       color: C.red,
       margin: "4px 2px 0"
     }
-  }, "上限（", MAX_TRANSCRIPT_CHARS.toLocaleString(), "文字）を超えています。録音を分けてください"), canReadClipboard && !submitting && /*#__PURE__*/React.createElement("button", {
+  }, "上限（", MAX_TRANSCRIPT_CHARS.toLocaleString(), "文字）を超えています。録音を分けてください"), duplicate && /*#__PURE__*/React.createElement("p", {
+    role: "alert",
+    style: {
+      fontSize: 13,
+      color: C.red,
+      fontWeight: 600,
+      lineHeight: 1.6,
+      margin: "6px 2px 0"
+    }
+  }, "直前に送った内容と同じです。別の録音の文字起こしをコピーしてください"), canReadClipboard && !submitting && /*#__PURE__*/React.createElement("button", {
     onClick: () => {
       setTranscript("");
       setManualMode(false);
@@ -2617,6 +2687,7 @@ function HomeScreen({ member, active, onShowHistory }) {
     target: delTarget,
     onCancel: () => setDelTarget(null),
     onDeleted: id => {
+      lastSentForget(id); // 削除した記録は、同じ内容をもう一度送れるようにする
       setDelTarget(null);
       setRecentRecs(prev => prev.filter(r => r.id !== id));
       if (noticeId === id) setNoticeId(null);
@@ -3437,6 +3508,7 @@ function HistoryScreen({
     target: delTarget,
     onCancel: () => setDelTarget(null),
     onDeleted: id => {
+      lastSentForget(id); // 削除した記録は、同じ内容をもう一度送れるようにする
       setRecords(prev => prev.filter(r => r.id !== id));
       setTotal(t => Math.max(0, t - 1));
       setDelTarget(null);
