@@ -1251,11 +1251,13 @@ function SummaryModal({
     gap: 6,
     cursor: "pointer"
   };
+  // 見出しは青く小さめにして、本文（黒）とひと目で見分けられるようにする
   const heading = first => ({
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: 700,
-    color: C.text,
-    margin: first ? "4px 0 6px" : "20px 0 6px"
+    color: C.blue,
+    letterSpacing: ".02em",
+    margin: first ? "0 0 6px" : "20px 0 6px"
   });
   const divider = {
     borderTop: `1px solid ${C.sep}`,
@@ -1407,10 +1409,13 @@ function SummaryModal({
   }, item.status === "error" ? "要約できませんでした。履歴の［再試行］でやり直せます。" + (item.processError ? "（" + item.processError + "）" : "") : "要約しています…"), dispSecs.map((sec, si) => /*#__PURE__*/React.createElement("div", {
     key: sec.key || si,
     style: {
-      paddingTop: si === 0 ? 14 : 0
+      background: C.bg,
+      borderRadius: 12,
+      padding: "12px 14px 10px",
+      marginTop: si === 0 ? 14 : 10
     }
   }, /*#__PURE__*/React.createElement("p", {
-    style: heading(si === 0)
+    style: heading(true)
   }, sec.label), (sec.items || []).map((it, ii) => editing ? /*#__PURE__*/React.createElement("textarea", {
     key: ii,
     value: it,
@@ -1425,10 +1430,11 @@ function SummaryModal({
         })
       }));
     },
-    rows: Math.max(1, Math.ceil(it.length / 22)),
+    // 16pxの文字で1行におよそ16文字入る（短めに見積もり、長い項目が切れて見えないようにする）
+    rows: Math.max(1, Math.ceil(it.length / 16)),
     style: {
       width: "100%",
-      background: C.bg,
+      background: C.surface,
       border: `1px solid ${C.sep}`,
       borderRadius: 8,
       padding: "8px 10px",
@@ -1459,11 +1465,11 @@ function SummaryModal({
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
-      width: 4,
-      height: 4,
+      width: 5,
+      height: 5,
       borderRadius: "50%",
-      background: C.text2,
-      marginTop: 11,
+      background: C.blue,
+      marginTop: 10,
       flexShrink: 0
     }
   }), /*#__PURE__*/React.createElement("span", null, it))))), analysis && !editing && /*#__PURE__*/React.createElement("div", {
