@@ -1945,39 +1945,45 @@ function SubmitProgress({ rec, onOpen, onShowHistory, onClose }) {
     return () => clearTimeout(t);
   }, [rec.id, sending]);
   const color = done ? C.green : failed ? C.red : C.blue;
+  // 画面の下に置き、片手（親指）で押しやすいよう、操作ボタンは幅いっぱいの大きなボタンにする
   const actionBtn = (label, onClick) => /*#__PURE__*/React.createElement("button", {
     onClick,
     style: {
-      marginTop: 8,
-      padding: "7px 14px",
-      borderRadius: 8,
+      width: "100%",
+      height: 50,
+      marginTop: 10,
+      borderRadius: 12,
       border: "none",
       background: color,
       color: "#fff",
-      fontSize: 13,
+      fontSize: 16,
       fontWeight: 600,
       cursor: "pointer",
-      display: "inline-flex",
+      display: "flex",
       alignItems: "center",
-      gap: 4
+      justifyContent: "center",
+      gap: 6
     }
   }, label, /*#__PURE__*/React.createElement(Ic, {
     n: "chevron-right",
-    size: 11,
+    size: 12,
     color: "#fff"
   }));
   return /*#__PURE__*/React.createElement("div", {
     role: "status",
     style: {
-      display: "flex",
-      alignItems: "flex-start",
-      gap: 8,
       background: `${color}14`,
       border: `1px solid ${color}40`,
-      borderRadius: 10,
-      padding: "10px 11px",
-      marginBottom: 10,
+      borderRadius: 14,
+      padding: "12px 12px",
+      marginTop: 10,
       color: C.text
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "flex-start",
+      gap: 8
     }
   }, /*#__PURE__*/React.createElement(Ic, {
     n: done ? "circle-check" : failed ? "circle-exclamation" : "spinner",
@@ -2012,7 +2018,7 @@ function SubmitProgress({ rec, onOpen, onShowHistory, onClose }) {
       lineHeight: 1.6,
       marginTop: 2
     }
-  }, rec.processError || "時間をおいて再試行してください。"), done && actionBtn("要約を見る", onOpen), failed && actionBtn("履歴で再試行", onShowHistory)), (done || failed) && /*#__PURE__*/React.createElement("button", {
+  }, rec.processError || "時間をおいて再試行してください。")), (done || failed) && /*#__PURE__*/React.createElement("button", {
     onClick: onClose,
     "aria-label": "案内を閉じる",
     style: {
@@ -2026,7 +2032,7 @@ function SubmitProgress({ rec, onOpen, onShowHistory, onClose }) {
     n: "xmark",
     size: 13,
     color: C.text2
-  })));
+  }))), done && actionBtn("要約を見る", onOpen), failed && actionBtn("履歴で再試行", onShowHistory));
 }
 // ホームは別の画面に移っても消さずに残す（active=false の間は隠すだけ）。以前は画面を
 // 移ると、貼り付けた本文・送信中の状態・進み具合の案内が消え、送信の失敗にも気づけず、
@@ -2354,6 +2360,9 @@ function HomeScreen({ member, active, onShowHistory }) {
     WebkitUserSelect: "text",
     userSelect: "text"
   };
+  // 片手（右手の親指）で操作しやすいよう、貼り付けの枠は画面の中央に、要約の進み具合の案内・
+  // ［要約を見る］・「前回」は画面の下に置く。貼り付け後の［要約する］は画面の下に固定する
+  // （文字起こしの長さで位置が変わらないように）。
   return /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
@@ -2366,11 +2375,11 @@ function HomeScreen({ member, active, onShowHistory }) {
       flex: 1,
       overflowY: "auto",
       WebkitOverflowScrolling: "touch",
-      paddingBottom: "env(safe-area-inset-bottom)"
+      paddingBottom: showEditor ? 0 : "env(safe-area-inset-bottom)"
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      padding: "20px 16px 16px",
+      padding: "16px 16px",
       display: "flex",
       flexDirection: "column",
       minHeight: "100%"
@@ -2386,66 +2395,21 @@ function HomeScreen({ member, active, onShowHistory }) {
       lineHeight: 1.6,
       color: C.red
     }
-  }, error), waitingCount > 0 && /*#__PURE__*/React.createElement("div", {
-    role: "status",
-    style: {
-      display: "flex",
-      alignItems: "center",
-      gap: 8,
-      background: `${C.orange}14`,
-      border: `1px solid ${C.orange}50`,
-      borderRadius: 10,
-      padding: "8px 8px 8px 11px",
-      marginBottom: 10,
-      color: C.text
-    }
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: flushing ? "spinner" : "wifi-slash",
-    size: 15,
-    color: C.orange,
-    cls: flushing ? "spin" : ""
-  }), /*#__PURE__*/React.createElement("div", {
+  }, error), !showEditor ? /*#__PURE__*/React.createElement("div", {
+    // 貼り付け前：枠（または控えめなボタン）を、残りの高さの中央に置く
     style: {
       flex: 1,
-      minWidth: 0
+      display: "flex",
+      flexDirection: "column",
+      justifyContent: "center",
+      padding: "12px 0"
     }
-  }, /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 14,
-      fontWeight: 600,
-      lineHeight: 1.5
-    }
-  }, flushing ? "送信待ちを送っています…" : `送信待ち ${waitingCount}件`), !flushing && /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 12,
-      color: C.text2,
-      lineHeight: 1.5
-    }
-  }, "通信できるようになったら自動で送ります")), !flushing && /*#__PURE__*/React.createElement("button", {
-    onClick: flushOutbox,
-    style: {
-      flexShrink: 0,
-      padding: "9px 12px",
-      borderRadius: 8,
-      border: `1px solid ${C.sep}`,
-      background: C.surface,
-      fontSize: 13,
-      fontWeight: 600,
-      color: C.blue,
-      cursor: "pointer"
-    }
-  }, "今すぐ送る")), noticeRec && /*#__PURE__*/React.createElement(SubmitProgress, {
-    rec: noticeRec,
-    onOpen: () => setSelectedRec(noticeRec),
-    onShowHistory: onShowHistory,
-    onClose: () => setNoticeId(null)
-  }), !showEditor && noticeRec ? /*#__PURE__*/React.createElement("button", {
+  }, noticeRec ? /*#__PURE__*/React.createElement("button", {
     // 要約の案内を出している間は、案内を主役にして貼り付けは控えめに（押し間違えないように）。
     // 案内を×で閉じると、元の大きな枠に戻る。
     onClick: pasteFromClipboard,
     style: {
       alignSelf: "center",
-      marginTop: 6,
       padding: "12px 16px",
       background: "none",
       border: "none",
@@ -2461,13 +2425,12 @@ function HomeScreen({ member, active, onShowHistory }) {
     n: "clipboard",
     size: 13,
     color: C.blue
-  }), "続けて別の録音を貼り付け") : !showEditor ? /*#__PURE__*/React.createElement("button", {
-    // 貼り付け前：画面の主役はこの枠ひとつ
+  }), "続けて別の録音を貼り付け") : /*#__PURE__*/React.createElement("button", {
+    // 貼り付け前：画面の主役はこの枠ひとつ。親指の届きやすい画面の中央に置く
     onClick: pasteFromClipboard,
     style: {
       width: "100%",
-      marginTop: 8,
-      padding: "40px 16px",
+      padding: "56px 16px",
       borderRadius: 16,
       border: `2px dashed ${C.blue}66`,
       background: `${C.blue}0D`,
@@ -2487,7 +2450,7 @@ function HomeScreen({ member, active, onShowHistory }) {
       fontSize: 17,
       fontWeight: 600
     }
-  }, "タップして貼り付け")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  }, "タップして貼り付け"))) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       alignItems: "baseline",
@@ -2594,34 +2557,69 @@ function HomeScreen({ member, active, onShowHistory }) {
       border: `1px solid ${C.sep}`,
       cursor: "pointer"
     }
-  }, n))), /*#__PURE__*/React.createElement("button", {
-    onClick: handleSubmit,
-    disabled: !canSubmit,
+  }, n)))), /*#__PURE__*/React.createElement("div", {
+    // 画面の下：送信待ち・要約の進み具合の案内・「前回」
     style: {
-      width: "100%",
-      marginTop: 18,
-      padding: "14px",
-      background: canSubmit ? C.blue : C.disabledBg,
-      color: canSubmit ? "#fff" : C.text2,
-      border: "none",
-      borderRadius: 12,
-      fontSize: 16,
-      fontWeight: 600,
+      marginTop: showEditor ? 16 : 0
+    }
+  }, waitingCount > 0 && /*#__PURE__*/React.createElement("div", {
+    role: "status",
+    style: {
       display: "flex",
       alignItems: "center",
-      justifyContent: "center",
       gap: 8,
-      cursor: canSubmit ? "pointer" : "default"
+      background: `${C.orange}14`,
+      border: `1px solid ${C.orange}50`,
+      borderRadius: 10,
+      padding: "8px 8px 8px 11px",
+      marginTop: 10,
+      color: C.text
     }
   }, /*#__PURE__*/React.createElement(Ic, {
-    n: "wand-magic-sparkles",
+    n: flushing ? "spinner" : "wifi-slash",
     size: 15,
-    color: canSubmit ? "#fff" : C.text2
-  }), "要約する")), showLast && /*#__PURE__*/React.createElement("button", {
+    color: C.orange,
+    cls: flushing ? "spin" : ""
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 14,
+      fontWeight: 600,
+      lineHeight: 1.5
+    }
+  }, flushing ? "送信待ちを送っています…" : `送信待ち ${waitingCount}件`), !flushing && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.text2,
+      lineHeight: 1.5
+    }
+  }, "通信できるようになったら自動で送ります")), !flushing && /*#__PURE__*/React.createElement("button", {
+    onClick: flushOutbox,
+    style: {
+      flexShrink: 0,
+      padding: "9px 12px",
+      borderRadius: 8,
+      border: `1px solid ${C.sep}`,
+      background: C.surface,
+      fontSize: 13,
+      fontWeight: 600,
+      color: C.blue,
+      cursor: "pointer"
+    }
+  }, "今すぐ送る")), noticeRec && /*#__PURE__*/React.createElement(SubmitProgress, {
+    rec: noticeRec,
+    onOpen: () => setSelectedRec(noticeRec),
+    onShowHistory: onShowHistory,
+    onClose: () => setNoticeId(null)
+  }), showLast && /*#__PURE__*/React.createElement("button", {
     // 最近の記録は「前回」の1件だけ（ほかは履歴から）
     onClick: () => setSelectedRec(lastRec),
     style: {
-      marginTop: "auto",
+      marginTop: 10,
       width: "100%",
       background: C.surface,
       borderRadius: 12,
@@ -2663,7 +2661,37 @@ function HomeScreen({ member, active, onShowHistory }) {
     style: {
       flexShrink: 0
     }
-  })))), selectedRec &&/*#__PURE__*/React.createElement(SummaryModal, {
+  }))))), showEditor && /*#__PURE__*/React.createElement("div", {
+    // 貼り付け後：［要約する］は画面の下に固定する
+    style: {
+      flexShrink: 0,
+      padding: "10px 16px calc(10px + env(safe-area-inset-bottom))",
+      background: C.bg,
+      borderTop: `1px solid ${C.sep}`
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: handleSubmit,
+    disabled: !canSubmit,
+    style: {
+      width: "100%",
+      height: 52,
+      background: canSubmit ? C.blue : C.disabledBg,
+      color: canSubmit ? "#fff" : C.text2,
+      border: "none",
+      borderRadius: 12,
+      fontSize: 16,
+      fontWeight: 600,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8,
+      cursor: canSubmit ? "pointer" : "default"
+    }
+  }, /*#__PURE__*/React.createElement(Ic, {
+    n: "wand-magic-sparkles",
+    size: 15,
+    color: canSubmit ? "#fff" : C.text2
+  }), "要約する")), selectedRec &&/*#__PURE__*/React.createElement(SummaryModal, {
     // 開いている間に処理が終わったら表示を切り替えられるよう、一覧の最新の状態を渡す
     item: recentRecs.find(r => r.id === selectedRec.id) || selectedRec,
     onClose: () => setSelectedRec(null),
