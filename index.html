@@ -10,7 +10,9 @@
   <meta name="apple-mobile-web-app-capable" content="yes"/>
   <meta name="apple-mobile-web-app-status-bar-style" content="default"/>
   <meta name="apple-mobile-web-app-title" content="ボイスメモ要約"/>
-  <meta name="theme-color" content="#007AFF"/>
+  <meta name="color-scheme" content="light dark"/>
+  <meta name="theme-color" content="#FFFFFF" media="(prefers-color-scheme: light)"/>
+  <meta name="theme-color" content="#1C1C1E" media="(prefers-color-scheme: dark)"/>
   <style>
     *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;margin:0;padding:0;-webkit-user-select:none;user-select:none}
     body{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Hiragino Kaku Gothic ProN",sans-serif;color:#1C1C1E}
@@ -23,6 +25,14 @@
     @keyframes spin{to{transform:rotate(360deg)}}
     @keyframes shimmer{0%{background-position:-400px 0}100%{background-position:400px 0}}
     .spin{animation:spin .9s linear infinite}
+    /* 押している間だけ少し薄く・小さくして、押せたことが分かるようにする */
+    button{transition:opacity .12s ease,transform .12s ease}
+    button:not(:disabled):active{opacity:.55;transform:scale(.98)}
+    @media (prefers-color-scheme: dark){
+      body{color:#FFFFFF}
+      html,body,#root{background:#000000}
+      ::-webkit-scrollbar-thumb{background:rgba(235,235,245,.25)}
+    }
   </style>
 </head>
 <body>
@@ -371,7 +381,10 @@ const PASSCODE_KEY = "vm_passcode";
 const AUTH_ERROR_EVENT = "vm-auth-error";
 
 // ── COLORS ──────────────────────────────────────────────
-const C = {
+// iPhoneの「外観モード」（ライト／ダーク）に合わせて切り替える。色は C から読むので、
+// 切り替えたら C の中身を入れ替えて画面を描き直す（App の useColorScheme）。
+// 色の後ろに透明度（例：`${C.blue}18`）を付けて使うので、sep 以外は6桁の色で書く。
+const LIGHT_COLORS = {
   bg: "#F2F2F7",
   surface: "#FFFFFF",
   text: "#1C1C1E",
@@ -383,8 +396,44 @@ const C = {
   red: "#FF3B30",
   blue: "#007AFF",
   green: "#34C759",
+  // 文字に使う緑（明るい緑は白地で読みにくいため濃くしている）
+  greenText: "#248A3D",
   orange: "#FF9500"
 };
+const DARK_COLORS = {
+  bg: "#000000",
+  surface: "#1C1C1E",
+  text: "#FFFFFF",
+  text2: "#A1A1A6",
+  disabledBg: "#2C2C2E",
+  sep: "rgba(84,84,88,.6)",
+  red: "#FF453A",
+  blue: "#0A84FF",
+  green: "#30D158",
+  greenText: "#30D158",
+  orange: "#FF9F0A"
+};
+const darkQuery = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+const C = Object.assign({}, darkQuery && darkQuery.matches ? DARK_COLORS : LIGHT_COLORS);
+function useColorScheme() {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!darkQuery) return;
+    const on = e => {
+      Object.assign(C, e.matches ? DARK_COLORS : LIGHT_COLORS);
+      setTick(n => n + 1);
+    };
+    // iOS 13 では addEventListener が無いので addListener を使う
+    if (darkQuery.addEventListener) darkQuery.addEventListener("change", on);else darkQuery.addListener(on);
+    return () => {
+      if (darkQuery.removeEventListener) darkQuery.removeEventListener("change", on);else darkQuery.removeListener(on);
+    };
+  }, []);
+}
+// iOS Safari は、どこかに touchstart の受け手が無いと押している間の見た目（:active）を出さない
+document.addEventListener("touchstart", () => {}, {
+  passive: true
+});
 
 // 要約のプロンプトはGAS側（getDefaultSystemPrompt）にだけある。
 
@@ -648,6 +697,27 @@ function Ic({
     },
     "aria-hidden": "true"
   });
+}
+
+// 1on1・会議の印。履歴と要約画面で、種類をひと目で見分けられるようにする
+function TypeTag({
+  type
+}) {
+  if (type !== "1on1" && type !== "group") return null;
+  const color = type === "group" ? C.greenText : C.blue;
+  return /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "inline-block",
+      flexShrink: 0,
+      padding: "0 7px",
+      borderRadius: 6,
+      fontSize: 11,
+      fontWeight: 700,
+      lineHeight: "19px",
+      color,
+      background: `${color}1F`
+    }
+  }, type === "group" ? "会議" : "1on1");
 }
 
 // ── LOGIN SCREEN ─────────────────────────────────────────
@@ -1103,6 +1173,32 @@ function SummaryModal({
   const [retypeConfirm, setRetypeConfirm] = useState(false);
   const [retyping, setRetyping] = useState(false);
   const sharingRef = useRef(false);
+  // 上の部分（つまみ・見出し）を下へなでて閉じる
+  const [dragY, setDragY] = useState(0);
+  const dragRef = useRef(null);
+  const onDragStart = e => {
+    dragRef.current = {
+      y: e.touches[0].clientY,
+      t: Date.now()
+    };
+  };
+  const onDragMove = e => {
+    if (!dragRef.current) return;
+    setDragY(Math.max(0, e.touches[0].clientY - dragRef.current.y));
+  };
+  const onDragEnd = () => {
+    const d = dragRef.current;
+    dragRef.current = null;
+    if (!d) return;
+    const fast = dragY / Math.max(1, Date.now() - d.t) > 0.6;
+    // 編集中・保存中は閉じない（書きかけの修正を失わないように）
+    if ((dragY > 120 || fast && dragY > 30) && !editing && !saving) {
+      setDragY(window.innerHeight);
+      setTimeout(onClose, 180);
+    } else {
+      setDragY(0);
+    }
+  };
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [draft, setDraft] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -1262,7 +1358,7 @@ function SummaryModal({
   // コピー・編集・キャンセルは同じ控えめな形にそろえ、保存だけを青にする
   const quietBtn = {
     flex: 1,
-    height: 40,
+    height: 46,
     borderRadius: 10,
     border: "none",
     background: C.bg,
@@ -1313,9 +1409,20 @@ function SummaryModal({
       background: C.surface,
       borderRadius: "20px 20px 0 0",
       display: "flex",
-      flexDirection: "column"
+      flexDirection: "column",
+      transform: `translateY(${dragY}px)`,
+      transition: dragRef.current ? "none" : "transform .2s ease"
     },
     onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    // つまみと見出し：ここを下へなでると閉じる
+    onTouchStart: onDragStart,
+    onTouchMove: onDragMove,
+    onTouchEnd: onDragEnd,
+    onTouchCancel: onDragEnd,
+    style: {
+      touchAction: "none"
+    }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
@@ -1353,13 +1460,18 @@ function SummaryModal({
       textOverflow: "ellipsis",
       whiteSpace: "nowrap"
     }
-  }, item.interviewee || "相手未入力"), /*#__PURE__*/React.createElement("p", {
+  }, item.interviewee || "相手未入力"), /*#__PURE__*/React.createElement("div", {
     style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 6,
       fontSize: 13,
       color: C.text2,
-      marginTop: 2
+      marginTop: 4
     }
-  }, [kind, relDate(item.date)].filter(Boolean).join(" · "))), /*#__PURE__*/React.createElement("button", {
+  }, /*#__PURE__*/React.createElement(TypeTag, {
+    type: item.sections?.meetingType
+  }), /*#__PURE__*/React.createElement("span", null, relDate(item.date)))), /*#__PURE__*/React.createElement("button", {
     "aria-label": "要約を閉じる",
     onClick: () => requestClose(false),
     style: {
@@ -1378,55 +1490,10 @@ function SummaryModal({
     n: "xmark",
     size: 14,
     color: C.text2
-  }))), showSecs && secs.length > 0 && /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      gap: 8,
-      marginTop: 14
-    }
-  }, editing ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
-    onClick: cancelEdit,
-    disabled: saving,
-    style: quietBtn
-  }, "キャンセル"), /*#__PURE__*/React.createElement("button", {
-    onClick: saveEdit,
-    disabled: saving,
-    style: {
-      ...quietBtn,
-      background: saving ? `${C.blue}80` : C.blue,
-      color: "#fff"
-    }
-  }, saving ? "保存中…" : "保存")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
-    onClick: doCopy,
-    style: quietBtn
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: copied ? "check" : "clipboard",
-    size: 13,
-    color: copied ? C.green : C.text
-  }), copied ? "コピーしました" : "コピー"), canShare && /*#__PURE__*/React.createElement("button", {
-    onClick: doShare,
-    style: quietBtn
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: "share-from-square",
-    size: 13,
-    color: C.text
-  }), "共有"), item.id && /*#__PURE__*/React.createElement("button", {
-    onClick: startEdit,
-    style: quietBtn
-  }, /*#__PURE__*/React.createElement(Ic, {
-    n: "pen",
-    size: 12,
-    color: C.text
-  }), "編集"))), msg && !copied && /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 12,
-      marginTop: 8,
-      color: msg.includes("失敗") ? C.red : C.green
-    }
-  }, msg)), /*#__PURE__*/React.createElement("div", {
+  }))))), /*#__PURE__*/React.createElement("div", {
     style: {
       overflowY: "auto",
-      padding: "4px 18px calc(32px + env(safe-area-inset-bottom))",
+      padding: showSecs && secs.length > 0 || msg ? "4px 18px 24px" : "4px 18px calc(24px + env(safe-area-inset-bottom))",
       flex: 1,
       borderTop: `1px solid ${C.sep}`
     }
@@ -1744,7 +1811,59 @@ function SummaryModal({
       cursor: "pointer",
       padding: "6px 12px"
     }
-  }, "この記録を削除")))));
+  }, "この記録を削除"))), (showSecs && secs.length > 0 || msg) && /*#__PURE__*/React.createElement("div", {
+    // 操作ボタンは画面の下に固定する（片手の親指で届くように。ホームと同じ位置）
+    style: {
+      flexShrink: 0,
+      padding: "10px 18px calc(10px + env(safe-area-inset-bottom))",
+      borderTop: `1px solid ${C.sep}`,
+      background: C.surface
+    }
+  }, showSecs && secs.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8
+    }
+  }, editing ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+    onClick: cancelEdit,
+    disabled: saving,
+    style: quietBtn
+  }, "キャンセル"), /*#__PURE__*/React.createElement("button", {
+    onClick: saveEdit,
+    disabled: saving,
+    style: {
+      ...quietBtn,
+      background: saving ? `${C.blue}80` : C.blue,
+      color: "#fff"
+    }
+  }, saving ? "保存中…" : "保存")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+    onClick: doCopy,
+    style: quietBtn
+  }, /*#__PURE__*/React.createElement(Ic, {
+    n: copied ? "check" : "clipboard",
+    size: 13,
+    color: copied ? C.green : C.text
+  }), copied ? "コピーしました" : "コピー"), canShare && /*#__PURE__*/React.createElement("button", {
+    onClick: doShare,
+    style: quietBtn
+  }, /*#__PURE__*/React.createElement(Ic, {
+    n: "share-from-square",
+    size: 13,
+    color: C.text
+  }), "共有"), item.id && /*#__PURE__*/React.createElement("button", {
+    onClick: startEdit,
+    style: quietBtn
+  }, /*#__PURE__*/React.createElement(Ic, {
+    n: "pen",
+    size: 12,
+    color: C.text
+  }), "編集"))), msg && !copied && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      marginTop: 8,
+      color: msg.includes("失敗") ? C.red : C.greenText
+    }
+  }, msg))));
 }
 
 // ── HOME SCREEN ───────────────────────────────────────────
@@ -2762,7 +2881,7 @@ const HELP_STEPS = [{
   body: "ホームの「タップして貼り付け」→［要約する］。「受け付けました」と出たら、アプリを閉じても大丈夫"
 }, {
   title: "見返す",
-  body: "メニューの「履歴」から。［コピー］［共有］［編集］、削除は要約画面のいちばん下"
+  body: "メニューの「履歴」から。下へ引っぱると最新に、行を左へなでると削除"
 }];
 const HELP_SUMMARY_TYPES = [{
   label: "1on1",
@@ -3080,6 +3199,93 @@ function DeleteConfirm({
     }
   }, deleting ? "削除中…" : "削除する"))));
 }
+const PULL_TRIGGER = 60;
+// 履歴の行。左へなでると右端に［削除］が出る（iPhoneの標準の操作）。開いている行を押すと閉じる。
+const SWIPE_ACTION_W = 84;
+function SwipeRow({
+  first,
+  open,
+  onOpenChange,
+  onDelete,
+  children
+}) {
+  const [dx, setDx] = useState(0);
+  const startRef = useRef(null);
+  const base = open ? -SWIPE_ACTION_W : 0;
+  const onStart = e => {
+    const t = e.touches[0];
+    startRef.current = {
+      x: t.clientX,
+      y: t.clientY,
+      horizontal: null
+    };
+  };
+  const onMove = e => {
+    const s = startRef.current;
+    if (!s) return;
+    const t = e.touches[0];
+    const mx = t.clientX - s.x,
+      my = t.clientY - s.y;
+    // 横と縦のどちらに動かしたかを、最初の少しの動きで決める（縦なら一覧のスクロールに任せる）
+    if (s.horizontal === null) {
+      if (Math.abs(mx) < 8 && Math.abs(my) < 8) return;
+      s.horizontal = Math.abs(mx) > Math.abs(my);
+    }
+    if (!s.horizontal) return;
+    setDx(Math.min(0, Math.max(-SWIPE_ACTION_W * 1.3, base + mx)) - base);
+  };
+  const onEnd = () => {
+    const s = startRef.current;
+    startRef.current = null;
+    if (!s || !s.horizontal) return;
+    const pos = base + dx;
+    setDx(0);
+    onOpenChange(pos < -SWIPE_ACTION_W / 2);
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "relative",
+      overflow: "hidden",
+      borderTop: first ? "none" : `1px solid ${C.sep}`
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onDelete,
+    tabIndex: open ? 0 : -1,
+    "aria-hidden": !open,
+    style: {
+      position: "absolute",
+      top: 0,
+      right: 0,
+      bottom: 0,
+      width: SWIPE_ACTION_W,
+      background: C.red,
+      color: "#fff",
+      fontSize: 15,
+      fontWeight: 600,
+      border: "none",
+      cursor: "pointer"
+    }
+  }, "削除"), /*#__PURE__*/React.createElement("div", {
+    onTouchStart: onStart,
+    onTouchMove: onMove,
+    onTouchEnd: onEnd,
+    onTouchCancel: onEnd,
+    // 開いている行を押したときは、要約を開かずに閉じる
+    onClickCapture: e => {
+      if (!open) return;
+      e.stopPropagation();
+      e.preventDefault();
+      onOpenChange(false);
+    },
+    style: {
+      position: "relative",
+      background: C.surface,
+      transform: `translateX(${base + dx}px)`,
+      transition: startRef.current ? "none" : "transform .2s ease",
+      touchAction: "pan-y"
+    }
+  }, children));
+}
 function HistoryScreen({
   memberFilter
 }) {
@@ -3112,6 +3318,27 @@ function HistoryScreen({
   const [typeFilter, setTypeFilter] = useState("all");
   const recordsRef = useRef([]),
     sentinelRef = useRef(null);
+  // 左へなでて［削除］を出している行
+  const [swipeOpenId, setSwipeOpenId] = useState(null);
+  // 一覧のいちばん上で下へ引っぱると、最新を読み込む（ホーム画面から開いたアプリでは
+  // ブラウザの「引っぱって更新」が使えないため）
+  const listRef = useRef(null);
+  const pullRef = useRef(null);
+  const [pull, setPull] = useState(0);
+  const onPullStart = e => {
+    pullRef.current = listRef.current && listRef.current.scrollTop <= 0 ? e.touches[0].clientY : null;
+  };
+  const onPullMove = e => {
+    if (pullRef.current == null) return;
+    const dy = e.touches[0].clientY - pullRef.current;
+    setPull(dy > 0 && listRef.current.scrollTop <= 0 ? Math.min(90, dy * 0.5) : 0);
+  };
+  const onPullEnd = () => {
+    if (pullRef.current == null) return;
+    pullRef.current = null;
+    if (pull >= PULL_TRIGGER && !loading) fetchFirst();
+    setPull(0);
+  };
   recordsRef.current = records;
   // 検索・絞り込みはGAS側で全件に対して行う（読み込み済みの分だけでなく古い記録も探せる）。
   // 入力のたびに問い合わせないよう、打ち終わって少し待ってから検索する。
@@ -3391,12 +3618,34 @@ function HistoryScreen({
       cursor: "pointer"
     }
   }, label))))), /*#__PURE__*/React.createElement("div", {
+    ref: listRef,
+    onTouchStart: onPullStart,
+    onTouchMove: onPullMove,
+    onTouchEnd: onPullEnd,
+    onTouchCancel: onPullEnd,
     style: {
       flex: 1,
       overflowY: "auto",
       padding: "4px 16px calc(24px + env(safe-area-inset-bottom))"
     }
-  }, error && /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("div", {
+    // 引っぱっている間の案内（離すと最新を読み込む）
+    style: {
+      height: pull,
+      overflow: "hidden",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 6,
+      fontSize: 12,
+      color: C.text2,
+      transition: pullRef.current == null ? "height .2s ease" : "none"
+    }
+  }, pull > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Ic, {
+    n: pull >= PULL_TRIGGER ? "rotate-right" : "chevron-down",
+    size: 12,
+    color: C.text2
+  }), pull >= PULL_TRIGGER ? "離すと更新" : "引っぱって更新")), error && /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       alignItems: "center",
@@ -3454,14 +3703,20 @@ function HistoryScreen({
   }, g.items.map((item, ii) => {
     const isError = item.status === "error";
     const isPending = ["queued", "processing"].includes(item.status);
-    const kind = item.sections?.meetingType === "group" ? "会議" : item.sections?.meetingType === "1on1" ? "1on1" : "";
     const retrying = retryingIds.has(item.id);
-    return /*#__PURE__*/React.createElement("div", {
+    return /*#__PURE__*/React.createElement(SwipeRow, {
       key: item.id,
+      first: ii === 0,
+      open: swipeOpenId === item.id,
+      onOpenChange: o => setSwipeOpenId(o ? item.id : null),
+      onDelete: () => {
+        setSwipeOpenId(null);
+        setDelTarget(item);
+      }
+    }, /*#__PURE__*/React.createElement("div", {
       style: {
         display: "flex",
-        alignItems: "center",
-        borderTop: ii > 0 ? `1px solid ${C.sep}` : "none"
+        alignItems: "center"
       }
     }, /*#__PURE__*/React.createElement("button", {
       onClick: () => setSelected(item),
@@ -3506,7 +3761,23 @@ function HistoryScreen({
         overflow: "hidden",
         textOverflow: "ellipsis"
       }
-    }, isError ? "要約できませんでした" : isPending ? "要約中…" : [kind, item.sections?.sections?.[0]?.items?.[0] || ""].filter(Boolean).join(" · "))), isError && /*#__PURE__*/React.createElement("button", {
+    }, isError ? "要約できませんでした" : isPending ? "要約中…" : /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        minWidth: 0
+      }
+    }, /*#__PURE__*/React.createElement(TypeTag, {
+      type: item.sections?.meetingType
+    }), /*#__PURE__*/React.createElement("span", {
+      style: {
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        minWidth: 0
+      }
+    }, item.sections?.sections?.[0]?.items?.[0] || "")))), isError && /*#__PURE__*/React.createElement("button", {
       onClick: () => doRetry(item),
       disabled: retrying,
       style: {
@@ -3521,7 +3792,7 @@ function HistoryScreen({
         color: C.blue,
         cursor: retrying ? "default" : "pointer"
       }
-    }, retrying ? "送信中…" : "再試行"));
+    }, retrying ? "送信中…" : "再試行")));
   })))), /*#__PURE__*/React.createElement("div", {
     ref: sentinelRef,
     style: {
@@ -3588,6 +3859,7 @@ function HistoryScreen({
 
 // ── APP ───────────────────────────────────────────────────
 function App() {
+  useColorScheme();
   // 合言葉を導入する前からログインしていた端末は、合言葉を入れてもらうまでログイン画面にする
   const [authed, setAuthed] = useState(() => lsGetAuth() && !!lsGetKey());
   const [loginNotice, setLoginNotice] = useState(() => lsGetAuth() && !lsGetKey() ? "合言葉を入力してください" : "");
