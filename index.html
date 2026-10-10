@@ -2872,7 +2872,11 @@ function HomeScreen({ member, active, onShowHistory, onShowPerson }) {
   }, "今すぐ送る")), noticeRec && /*#__PURE__*/React.createElement(SubmitProgress, {
     rec: noticeRec,
     stalled: pollStalled,
-    onOpen: () => setSelectedRec(noticeRec),
+    // 要約を開いたら案内は役目を終えるので消す（閉じたら最初の貼り付け画面に戻る。要約は「前回」から開き直せる）
+    onOpen: () => {
+      setSelectedRec(noticeRec);
+      setNoticeId(null);
+    },
     onShowHistory: onShowHistory,
     onClose: () => setNoticeId(null)
   }), showLast && /*#__PURE__*/React.createElement("button", {
