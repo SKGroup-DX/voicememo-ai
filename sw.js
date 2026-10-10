@@ -1,7 +1,7 @@
 // ボイスメモ要約 - Service Worker
 // キャッシュ戦略: 画面本体(HTML)はネットワーク優先、アイコン等はキャッシュ優先
 
-const CACHE_NAME = 'voicememo-ai-v19'; // 画面（index.html）を変えたら番号を上げる（利用者に「新しいバージョンがあります」が出る）
+const CACHE_NAME = 'voicememo-ai-v20'; // 画面（index.html）を変えたら番号を上げる（利用者に「新しいバージョンがあります」が出る）
 
 // 画面本体を取りに行って、この時間を過ぎたら保存済みの画面を出す
 const PAGE_TIMEOUT_MS = 4000;
