@@ -1,7 +1,10 @@
 // ボイスメモ要約 - Service Worker
 // キャッシュ戦略: 画面本体(HTML)はネットワーク優先、アイコン等はキャッシュ優先
 
-const CACHE_NAME = 'voicememo-ai-v17'; // 画面（index.html）を変えたら番号を上げる（利用者に「新しいバージョンがあります」が出る）
+const CACHE_NAME = 'voicememo-ai-v18'; // 画面（index.html）を変えたら番号を上げる（利用者に「新しいバージョンがあります」が出る）
+
+// 画面本体を取りに行って、この時間を過ぎたら保存済みの画面を出す
+const PAGE_TIMEOUT_MS = 4000;
 
 // キャッシュするアセット
 const ASSETS = [
@@ -44,18 +47,31 @@ self.addEventListener('fetch', event => {
   // 画面本体はネットワーク優先（取れなければ保存済みの画面）。以前はすべて
   // キャッシュ優先だったため、sw.js自体を変えない限り新しい画面が端末に
   // 一切届かず、更新しても古い画面が表示され続けていた。
+  // ただし電波が弱く、つながってはいるが遅いときに白い画面のまま待たせないよう、
+  // 保存済みの画面があれば PAGE_TIMEOUT_MS で見切ってそれを出す（取りに行った最新の画面は
+  // 裏で保存し、次に開いたときに使う）。fetch 自体は中断しない。
   const isPage = event.request.mode === 'navigate' || event.request.url.endsWith('/index.html');
   if (isPage) {
+    const network = fetch(event.request.url, { cache: 'no-cache' })
+      .then(response => {
+        if (response.ok) {
+          const clone = response.clone();
+          return caches.open(CACHE_NAME)
+            .then(cache => cache.put('./index.html', clone))
+            .then(() => response, () => response);
+        }
+        return response;
+      });
+    event.waitUntil(network.catch(() => {}));
     event.respondWith(
-      fetch(event.request.url, { cache: 'no-cache' })
-        .then(response => {
-          if (response.ok) {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then(cache => cache.put('./index.html', clone));
-          }
-          return response;
-        })
-        .catch(() => caches.match('./index.html'))
+      caches.match('./index.html').then(cached => {
+        if (!cached) return network;
+        return Promise.race([
+          // 画面が取れなかった（エラーの応答も含む）ときは保存済みの画面
+          network.then(r => r.ok ? r : cached, () => cached),
+          new Promise(resolve => setTimeout(() => resolve(cached), PAGE_TIMEOUT_MS))
+        ]);
+      })
     );
     return;
   }

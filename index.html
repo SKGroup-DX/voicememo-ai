@@ -612,6 +612,7 @@ function lsSetUser(u) {
 function lsClearAuth() {
   localStorage.removeItem(AUTH_KEY);
   localStorage.removeItem("vm_user");
+  localStorage.removeItem(DRAFT_KEY);
   histCacheClear();
 }
 // 合言葉はログアウトしても残す（名前の切り替えのたびに入れ直さなくてよいように）。
@@ -729,6 +730,8 @@ function TypeTag({
 function normalizeName(s) {
   return String(s || "").replace(/[\s　]+/g, "");
 }
+// 名前の長さの上限（GASの MAX_MEMBER_CHARS と同じ）
+const MAX_NAME_CHARS = 50;
 function LoginScreen({
   onLogin,
   notice
@@ -747,6 +750,10 @@ function LoginScreen({
     const n = normalizeName(raw);
     if (!n) {
       setErr("名前を入力してください");
+      return;
+    }
+    if (n.length > MAX_NAME_CHARS) {
+      setErr(`名前は${MAX_NAME_CHARS}文字までにしてください`);
       return;
     }
     const k = passcode.trim();
@@ -923,12 +930,20 @@ function LoginScreen({
     type: "text",
     value: name,
     "aria-label": "お名前",
+    maxLength: MAX_NAME_CHARS,
+    // ローマ字の名前の先頭が端末によって大文字・小文字に分かれ、履歴が分かれないように
+    autoCapitalize: "none",
+    autoCorrect: "off",
+    spellCheck: false,
+    autoComplete: "off",
     onChange: e => {
       setName(e.target.value);
       setErr("");
     },
     onKeyDown: e => {
-      if (e.key === "Enter") doLogin(name);
+      // 日本語の変換を確定するための Enter ではログインしない
+      if (e.key !== "Enter" || e.nativeEvent.isComposing || e.keyCode === 229) return;
+      doLogin(name);
     },
     placeholder: "お名前（例：山田太郎）",
     style: field
@@ -984,6 +999,24 @@ async function reloadLatest() {
   try {
     const r = await navigator.serviceWorker?.getRegistration();
     await r?.update();
+    // 新しい版が見つかったら、使えるようになる（activated）まで少し待つ
+    const w = r && (r.installing || r.waiting);
+    if (w) await new Promise(resolve => {
+      const t = setTimeout(resolve, 4000);
+      w.addEventListener("statechange", () => {
+        if (w.state === "activated") {
+          clearTimeout(t);
+          resolve();
+        }
+      });
+    });
+  } catch {}
+  reloadPage();
+}
+// 読み込み直した直後には「新しいバージョンがあります」を出さない（すでに最新のため）
+function reloadPage() {
+  try {
+    sessionStorage.setItem("vm_reloaded_at", String(Date.now()));
   } catch {}
   window.location.reload();
 }
@@ -1043,6 +1076,7 @@ function Drawer({
       display: "flex",
       flexDirection: "column",
       padding: "max(52px, calc(env(safe-area-inset-top) + 16px)) 16px max(16px, env(safe-area-inset-bottom))",
+      borderRight: `1px solid ${C.sep}`,
       boxShadow: open ? "6px 0 24px rgba(0,0,0,.1)" : "none"
     }
   }, userName && /*#__PURE__*/React.createElement("div", {
@@ -1167,7 +1201,8 @@ function SummaryModal({
   onClose,
   onSaved,
   onDelete,
-  onRequeued
+  onRequeued,
+  onShowPerson
 }) {
   const [editing, setEditing] = useState(false);
   // 編集で追加した項目に、すぐ入力できるようにする
@@ -1335,6 +1370,7 @@ function SummaryModal({
   const requestClose = fromBackdrop => {
     if (saving) return;
     if (fromBackdrop && editing) return;
+    if (editing && !window.confirm("編集中の内容を保存せずに閉じますか？")) return;
     onClose();
   };
   // 要約中・失敗した記録は、前の要約（要約し直す前のもの）を出さずに状況だけを出す
@@ -1461,7 +1497,36 @@ function SummaryModal({
       flex: 1,
       minWidth: 0
     }
-  }, /*#__PURE__*/React.createElement("p", {
+  }, onShowPerson && item.interviewee && !editing && item.status !== "sending" ? /*#__PURE__*/React.createElement("button", {
+    // 相手の名前を押すと、その人との記録だけを並べた履歴を開く（前回のアクションなどを見返せる）
+    onClick: () => onShowPerson(item.interviewee),
+    "aria-label": `${item.interviewee}との記録をすべて見る`,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 4,
+      maxWidth: "100%",
+      padding: 0,
+      background: "none",
+      border: "none",
+      textAlign: "left",
+      cursor: "pointer"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 19,
+      fontWeight: 700,
+      color: C.text,
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
+      minWidth: 0
+    }
+  }, item.interviewee), /*#__PURE__*/React.createElement(Ic, {
+    n: "chevron-right",
+    size: 13,
+    color: C.text2
+  })) : /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 19,
       fontWeight: 700,
@@ -1974,7 +2039,7 @@ function useStatusPolling(list, setList, enabled = true) {
       }, 45000).catch(() => null);
       if (d && d.success) {
         results = d.results || {};
-      } else if (d && d.success === false) {
+      } else if (d && d.success === false && /Unknown action/.test(d.error || "")) {
         // まとめて確認する仕組みが無い古いGASの場合は、1件ずつ確認する
         const each = await Promise.all(ids.map(id => gasPost({
           action: "getRecordStatus",
@@ -2028,6 +2093,30 @@ function outboxSet(list) {
   } catch {
     return false;
   }
+}
+// 入力中（まだ送っていない）の本文と相手。ログアウトしたら消す
+const DRAFT_KEY = "vm_draft";
+function draftGet(member) {
+  try {
+    const d = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null");
+    if (d && d.member === member) return d;
+  } catch {}
+  return {};
+}
+function draftSet(member, transcript, interviewee) {
+  try {
+    if (transcript.trim() || interviewee.trim()) localStorage.setItem(DRAFT_KEY, JSON.stringify({
+      member,
+      transcript,
+      interviewee
+    }));else localStorage.removeItem(DRAFT_KEY);
+  } catch {}
+}
+// 削除した記録を、端末の送信待ち・「直前に送った内容」からも消す（送り直して復活しないように）
+function forgetRecordLocally(id) {
+  lastSentForget(id);
+  const items = outboxGet();
+  if (items.some(x => x.id === id)) outboxSet(items.filter(x => x.id !== id));
 }
 // 端末の時刻での「yyyy-MM-dd HH:mm:ss」
 function localDateTime(d) {
@@ -2199,7 +2288,7 @@ function SubmitProgress({ rec, stalled, onOpen, onShowHistory, onClose }) {
 // ホームは別の画面に移っても消さずに残す（active=false の間は隠すだけ）。以前は画面を
 // 移ると、貼り付けた本文・送信中の状態・進み具合の案内が消え、送信の失敗にも気づけず、
 // 送り直すと記録が2件になることがあった。
-function HomeScreen({ member, active, onShowHistory }) {
+function HomeScreen({ member, active, onShowHistory, onShowPerson }) {
   const [selectedRec, setSelectedRec] = useState(null);
   const [delTarget, setDelTarget] = useState(null);
   // 端末に保存した前回の履歴があれば、それをすぐ出しておく（裏で最新に差し替える）
@@ -2213,11 +2302,17 @@ function HomeScreen({ member, active, onShowHistory }) {
   }
   const [recentRecs, setRecentRecs] = useState(() => (cachedRef.current || []).slice(0, HOME_RECENT_COUNT));
   const [nameCandidates, setNameCandidates] = useState(() => uniqueNames((cachedRef.current || []).map(r => r.interviewee)));
-  const [transcript, setTranscript] = useState("");
+  // 入力中の本文と相手は端末に一時保存しておき、開き直したときに戻す
+  const draftRef = useRef(undefined);
+  if (draftRef.current === undefined) draftRef.current = draftGet(member);
+  const [transcript, setTranscript] = useState(() => draftRef.current.transcript || "");
   // 送る処理の途中で、入力欄に本文があるかを確かめるため（入力中の本文を上書きしないように）
   const transcriptRef = useRef("");
   transcriptRef.current = transcript;
-  const [interviewee, setInterviewee] = useState("");
+  const [interviewee, setInterviewee] = useState(() => draftRef.current.interviewee || "");
+  useEffect(() => {
+    draftSet(member, transcript, interviewee);
+  }, [member, transcript, interviewee]);
   // 貼り付けボタンが使えなかったとき、手で貼り付ける欄を出す
   const [manualMode, setManualMode] = useState(false);
   // 相手の名前の候補は、名前の欄を押している間だけ出す
@@ -2276,6 +2371,14 @@ function HomeScreen({ member, active, onShowHistory }) {
   // ホームが隠れている間は確認しない（履歴の画面が同じ記録を確認するため）
   const pollStalled = useStatusPolling(recentRecs, setRecentRecs, active);
   useRecordChanges(setRecentRecs);
+  // 履歴で削除した記録が送信待ちに残っていた場合に、送信待ちの表示を合わせる
+  useEffect(() => {
+    const on = e => {
+      if (e.detail && e.detail.type === "deleted") setOutbox(outboxGet());
+    };
+    window.addEventListener(RECORD_EVENT, on);
+    return () => window.removeEventListener(RECORD_EVENT, on);
+  }, []);
   // 1件を送る。startSummary: 受け付けと同時に、本文付きで要約開始も送る（GASは保存を待たずに
   // AIを呼べる）。結果は { result: "accepted"（受け付けられた）| "rejected"（断られた。送り直しても
   // 同じ）| "failed"（通信できなかった。後で送り直す）, error }。受け付けられたら送信待ちから外す。
@@ -2902,6 +3005,10 @@ function HomeScreen({ member, active, onShowHistory }) {
       setSelectedRec(null);
       setDelTarget(item);
     },
+    onShowPerson: name => {
+      setSelectedRec(null);
+      onShowPerson(name);
+    },
     onRequeued: id => {
       notifyRecordChange({
         type: "updated",
@@ -2931,7 +3038,7 @@ function HomeScreen({ member, active, onShowHistory }) {
     target: delTarget,
     onCancel: () => setDelTarget(null),
     onDeleted: id => {
-      lastSentForget(id); // 削除した記録は、同じ内容をもう一度送れるようにする
+      forgetRecordLocally(id); // 送信待ちから送り直して復活しないように・同じ内容をもう一度送れるように
       setDelTarget(null);
       notifyRecordChange({
         type: "deleted",
@@ -2959,7 +3066,7 @@ const HELP_STEPS = [{
   body: "ホームの「タップして貼り付け」→［要約する］。「受け付けました」と出たら、アプリを閉じても大丈夫"
 }, {
   title: "見返す",
-  body: "メニューの「履歴」から。下へ引っぱると最新に、行を左へなでると削除"
+  body: "メニューの「履歴」から。要約画面で相手の名前を押すと、その人との記録だけを表示。下へ引っぱると最新に、行を左へなでると削除"
 }];
 const HELP_SUMMARY_TYPES = [{
   label: "1on1",
@@ -3326,7 +3433,8 @@ function SwipeRow({
       overflow: "hidden",
       borderTop: first ? "none" : `1px solid ${C.sep}`
     }
-  }, /*#__PURE__*/React.createElement("button", {
+  }, (open || dx < 0) && /*#__PURE__*/React.createElement("button", {
+    // なでている間・開いている間だけ描く（閉じているときに行の境目から透けないように）
     onClick: onDelete,
     tabIndex: open ? 0 : -1,
     "aria-hidden": !open,
@@ -3365,8 +3473,11 @@ function SwipeRow({
   }, children));
 }
 function HistoryScreen({
-  memberFilter
+  memberFilter,
+  initialPerson
 }) {
+  // 相手での絞り込み（要約画面の相手の名前から開いたとき）
+  const [person, setPerson] = useState(initialPerson || "");
   // 端末に保存した前回の履歴があれば、それをすぐ出しておく（裏で最新に差し替える）
   const loadCached = () => {
     const c = histCacheGet(memberFilter);
@@ -3436,11 +3547,12 @@ function HistoryScreen({
     };
     if (searchQ) p.q = searchQ;
     if (typeFilter !== "all") p.type = typeFilter;
+    if (person) p.person = person;
     return p;
   };
   const fetchFirst = useCallback(async () => {
     const reqId = ++reqIdRef.current;
-    const isDefault = !searchQ && typeFilter === "all";
+    const isDefault = !searchQ && typeFilter === "all" && !person;
     const cached = isDefault ? loadCached() : null;
     setError(null);
     setMoreError(false);
@@ -3474,7 +3586,7 @@ function HistoryScreen({
     }
     setLoading(false);
     setRefreshing(false);
-  }, [memberFilter, searchQ, typeFilter]);
+  }, [memberFilter, searchQ, typeFilter, person]);
   // 絞り込みなしの一覧が変わったら（最新の取得・削除・編集・要約の完了など）端末に保存し直す
   useEffect(() => {
     if (loading || !recordsDefaultRef.current) return;
@@ -3521,7 +3633,7 @@ function HistoryScreen({
     });
     ob.observe(sentinelRef.current);
     return () => ob.disconnect();
-  }, [hasMore, moreLoading, moreError, searchQ, typeFilter]);
+  }, [hasMore, moreLoading, moreError, searchQ, typeFilter, person]);
   useStatusPolling(records, setRecords);
   useRecordChanges(setRecords);
   // 5分以上離れてから戻ってきたら、一覧を取り直す（ほかの端末での変更や要約の完了を反映）
@@ -3556,7 +3668,7 @@ function HistoryScreen({
     });
   };
 
-  const isFiltering = !!searchQ || typeFilter !== "all";
+  const isFiltering = !!searchQ || typeFilter !== "all" || !!person;
   // 日付のまとまり（今日・昨日・過去7日間・◯年◯月）ごとに、1つの枠の中へ行を並べる
   const groups = [];
   records.forEach(item => {
@@ -3699,7 +3811,36 @@ function HistoryScreen({
       color: typeFilter === key ? C.text : C.text2,
       cursor: "pointer"
     }
-  }, label))))), /*#__PURE__*/React.createElement("div", {
+  }, label)))), person && /*#__PURE__*/React.createElement("button", {
+    // 相手で絞り込んでいることを示す。押すと絞り込みをやめる
+    onClick: () => setPerson(""),
+    "aria-label": `${person}での絞り込みをやめる`,
+    style: {
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 6,
+      marginTop: 10,
+      padding: "7px 10px 7px 12px",
+      borderRadius: 16,
+      border: "none",
+      background: `${C.blue}18`,
+      color: C.blue,
+      fontSize: 13,
+      fontWeight: 600,
+      cursor: "pointer",
+      maxWidth: "100%"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap"
+    }
+  }, "相手：", person), /*#__PURE__*/React.createElement(Ic, {
+    n: "xmark",
+    size: 11,
+    color: C.blue
+  }))), /*#__PURE__*/React.createElement("div", {
     ref: listRef,
     onTouchStart: onPullStart,
     onTouchMove: onPullMove,
@@ -3911,7 +4052,7 @@ function HistoryScreen({
     target: delTarget,
     onCancel: () => setDelTarget(null),
     onDeleted: id => {
-      lastSentForget(id); // 削除した記録は、同じ内容をもう一度送れるようにする
+      forgetRecordLocally(id); // 送信待ちから送り直して復活しないように・同じ内容をもう一度送れるように
       notifyRecordChange({
         type: "deleted",
         id
@@ -3928,6 +4069,11 @@ function HistoryScreen({
       setDelTarget(item);
     },
     onRequeued: markRequeued,
+    onShowPerson: name => {
+      setSelected(null);
+      setQ("");
+      setPerson(name);
+    },
     onSaved: secs => {
       // 閉じた後に保存が終わった場合は開き直さない
       setSelected(s => s ? {
@@ -4011,7 +4157,10 @@ function App() {
     setDrawerOpen(false);
     setScreen("home");
   };
+  // 履歴を相手で絞り込んで開くときの相手（メニューから開くときは絞り込まない）
+  const [historyPerson, setHistoryPerson] = useState("");
   const handleNav = k => {
+    setHistoryPerson("");
     setScreen(k);
   };
   if (!authed) return /*#__PURE__*/React.createElement("div", {
@@ -4107,7 +4256,7 @@ function App() {
       color: C.text
     }
   }, /*#__PURE__*/React.createElement("span", null, "新しいバージョンがあります"), /*#__PURE__*/React.createElement("button", {
-    onClick: () => window.location.reload(),
+    onClick: reloadPage,
     style: {
       padding: "5px 12px",
       borderRadius: 8,
@@ -4179,9 +4328,18 @@ function App() {
   }, /*#__PURE__*/React.createElement(HomeScreen, {
     member: member,
     active: screen === "home",
-    onShowHistory: () => setScreen("history")
+    onShowHistory: () => {
+      setHistoryPerson("");
+      setScreen("history");
+    },
+    onShowPerson: name => {
+      setHistoryPerson(name);
+      setScreen("history");
+    }
   })), screen === "help" ? /*#__PURE__*/React.createElement(HelpScreen, null) : screen === "history" ? /*#__PURE__*/React.createElement(HistoryScreen, {
-    memberFilter: currentUser?.name || ""
+    key: historyPerson || "all",
+    memberFilter: currentUser?.name || "",
+    initialPerson: historyPerson
   }) : null));
 }
 class ErrorBoundary extends React.Component {
@@ -4247,6 +4405,8 @@ if('serviceWorker'in navigator&&!location.hostname.includes('claudeusercontent')
     navigator.serviceWorker.register('./sw.js').then(r=>r.update()).catch(()=>{});
     navigator.serviceWorker.addEventListener('controllerchange',()=>{
       if (!hadController) return;
+      // 「最新版に更新」「更新する」で読み込み直した直後は、すでに最新なので案内しない
+      try { if (Date.now() - Number(sessionStorage.getItem('vm_reloaded_at') || 0) < 20000) return; } catch (e) {}
       window.__vmUpdateReady = true;
       window.dispatchEvent(new Event('vm-update-ready'));
     });

@@ -173,30 +173,53 @@ function withLock_(fn, waitMs) {
 // q: キーワード（空白区切りで複数指定するとすべてを含むものだけ）。相手・要約・
 //    文字起こしのどれかに含まれていれば該当とする。
 // type: "1on1" | "group"（指定なしはすべて）
+// person: 相手（相手の欄が完全に一致する記録だけ。要約画面の相手の名前から開いたとき）
+// 記録が増えても重くならないよう、まず軽い列（ID〜状態）だけを読んでこの人の記録の行を選び、
+// 要約や文字起こし（大きい列）は必要な行の分だけ読む。以前は毎回、全員分を読んでいた。
 function getHistory(body) {
   const member = String(body.member || "");
   if (!member) return { success: false, error: "member required" };
   const limit  = Math.min(parseInt(body.limit) || 20, HISTORY_MAX_LIMIT);
   const offset = Math.max(parseInt(body.offset) || 0, 0);
   const type   = String(body.type || "");
+  const person = String(body.person || "").trim();
   const terms  = String(body.q || "").toLowerCase().split(/[\s　]+/).filter(Boolean);
 
-  // 文字起こしの本文は検索するときだけ読む（記録が増えるほど重くなる列のため）
-  const rows = terms.length ? readAllRows() : readRowsWithoutTranscript_();
+  const sheet = recordsSheet();
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= HEADER_ROW) return { success: true, records: [], total: 0, hasMore: false };
+  const n = lastRow - HEADER_ROW;
+  const heads = sheet.getRange(HEADER_ROW + 1, 1, n, COL.STATUS).getValues();
+  let rows = [];
+  for (let i = n - 1; i >= 0; i--) { // 新しい順
+    const h = heads[i];
+    if (!h[COL.ID - 1] && h[COL.ID - 1] !== 0) continue;
+    if (readText_(h[COL.MEMBER - 1]) !== member) continue;
+    if (person && readText_(h[COL.INTERVIEWEE - 1]) !== person) continue;
+    rows.push(HEADER_ROW + 1 + i);
+  }
+  if (terms.length) rows = narrowBySearch_(sheet, rows, terms[0], n);
+
+  // 種類や検索で絞り込むときは候補の行をすべて、絞り込まないときは表示するページの行だけを読む
+  const filtering = !!type || terms.length > 0;
+  const target = filtering ? rows : rows.slice(offset, offset + limit);
+  const data = readRowsByNumber_(sheet, target, terms.length > 0);
   const matched = [];
-  for (let i = rows.length - 1; i >= 0; i--) { // 新しい順
-    const row = rows[i];
-    if (readText_(row[COL.MEMBER - 1]) !== member) continue;
-    const rec = rowToRecord(row);
-    if (!rec) continue;
-    if (type && !(rec.sections && rec.sections.meetingType === type)) continue;
+  target.forEach(r => {
+    const row = data[r];
+    const rec = row ? rowToRecord(row) : null;
+    if (!rec) return;
+    if (type && !(rec.sections && rec.sections.meetingType === type)) return;
     if (terms.length) {
       const text = searchableText(rec, row);
-      if (!terms.every(t => text.indexOf(t) !== -1)) continue;
+      if (!terms.every(t => text.indexOf(t) !== -1)) return;
     }
     matched.push(rec);
-  }
+  });
 
+  if (!filtering) {
+    return { success: true, records: matched, total: rows.length, hasMore: offset + limit < rows.length };
+  }
   const total = matched.length;
   return {
     success: true,
@@ -204,6 +227,48 @@ function getHistory(body) {
     total,
     hasMore: offset + limit < total
   };
+}
+
+// 1つ目の検索語を含む行を、スプレッドシートの検索機能（TextFinder）で探して候補を絞る
+// （全員分の文字起こしを読まないように）。候補は後で要約・文字起こしを読んで確かめ直す。
+// 検索機能が使えないときは絞らずに返す（遅くはなるが結果は同じ）。
+function narrowBySearch_(sheet, rows, term, n) {
+  if (!rows.length) return rows;
+  try {
+    const found = {};
+    sheet.getRange(HEADER_ROW + 1, COL.INTERVIEWEE, n, COL.TRANSCRIPT - COL.INTERVIEWEE + 1)
+      .createTextFinder(term).matchCase(false).findAll()
+      .forEach(cell => { found[cell.getRow()] = true; });
+    return rows.filter(r => found[r]);
+  } catch (e) {
+    console.warn("[getHistory] 検索機能が使えないため、絞らずに確かめます:", e.message);
+    return rows;
+  }
+}
+
+// 指定した行番号の行を読み、{ 行番号: 値の配列 } で返す。文字起こしの列は withTranscript の
+// ときだけ読む（読まない場合は null）。行がまとまっていれば一度に、広く散らばった少ない行なら
+// 1行ずつ読む（読む量を減らす）。
+const ROW_BLOCK_MAX_SPAN = 1000;
+function readRowsByNumber_(sheet, rowNums, withTranscript) {
+  const out = {};
+  if (!rowNums.length) return out;
+  const read = (start, count) => {
+    const before = sheet.getRange(start, 1, count, COL.TRANSCRIPT - 1).getValues();
+    const trans = withTranscript ? sheet.getRange(start, COL.TRANSCRIPT, count, 1).getValues() : null;
+    const after = sheet.getRange(start, COL.TRANSCRIPT + 1, count, NUM_COLS - COL.TRANSCRIPT).getValues();
+    return before.map((r, i) => r.concat([trans ? trans[i][0] : null], after[i]));
+  };
+  const min = Math.min.apply(null, rowNums);
+  const max = Math.max.apply(null, rowNums);
+  const span = max - min + 1;
+  if (span <= ROW_BLOCK_MAX_SPAN || rowNums.length > 20) {
+    const block = read(min, span);
+    rowNums.forEach(r => { out[r] = block[r - min]; });
+  } else {
+    rowNums.forEach(r => { out[r] = read(r, 1)[0]; });
+  }
+  return out;
 }
 
 function searchableText(rec, row) {
@@ -261,12 +326,19 @@ function getRecordStatuses(body) {
   const ids = (Array.isArray(body.ids) ? body.ids : []).map(String).slice(0, STATUS_MAX_IDS);
   const wanted = {};
   ids.forEach(id => { wanted[id] = true; });
+  // ID の列だけを読んで行を探し、その行だけを読む（5秒おきに呼ばれるので軽くしておく）
   const results = {};
-  readRowsWithoutTranscript_().forEach(row => {
-    const id = String(row[COL.ID - 1]);
-    if (wanted[id]) results[id] = statusOf_(row);
-  });
-  ids.forEach(id => { if (!results[id]) results[id] = { found: false }; });
+  const sheet = recordsSheet();
+  const lastRow = sheet.getLastRow();
+  const rowOf = {};
+  if (lastRow > HEADER_ROW) {
+    sheet.getRange(HEADER_ROW + 1, COL.ID, lastRow - HEADER_ROW, 1).getValues().forEach((r, i) => {
+      const id = String(r[0]);
+      if (wanted[id] && !rowOf[id]) rowOf[id] = HEADER_ROW + 1 + i;
+    });
+  }
+  const data = readRowsByNumber_(sheet, Object.keys(rowOf).map(id => rowOf[id]), false);
+  ids.forEach(id => { results[id] = rowOf[id] && data[rowOf[id]] ? statusOf_(data[rowOf[id]]) : { found: false }; });
   return { success: true, results };
 }
 
