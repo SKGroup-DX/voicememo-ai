@@ -1213,26 +1213,48 @@ function SummaryModal({
   const [retypeConfirm, setRetypeConfirm] = useState(false);
   const [retyping, setRetyping] = useState(false);
   const sharingRef = useRef(false);
-  // 上の部分（つまみ・見出し）を下へなでて閉じる
+  // 上の部分（つまみ・見出し）を下へなでて閉じる。本文がいちばん上までスクロールされている
+  // ときは、本文を下へなでても閉じる（iPhoneの標準の画面と同じ。以前は上の部分だけが反応し、
+  // 本文をなでると何も起きなかった）
   const [dragY, setDragY] = useState(0);
   const dragRef = useRef(null);
+  const bodyRef = useRef(null);
   const onDragStart = e => {
     dragRef.current = {
       y: e.touches[0].clientY,
-      t: Date.now()
+      t: Date.now(),
+      dy: 0
     };
   };
   const onDragMove = e => {
-    if (!dragRef.current) return;
-    setDragY(Math.max(0, e.touches[0].clientY - dragRef.current.y));
+    const d = dragRef.current;
+    if (!d) return;
+    d.dy = Math.max(0, e.touches[0].clientY - d.y);
+    setDragY(d.dy);
+  };
+  const onBodyTouchStart = e => {
+    if (!editing && bodyRef.current && bodyRef.current.scrollTop <= 0) onDragStart(e);
+  };
+  const onBodyTouchMove = e => {
+    const d = dragRef.current;
+    if (!d) return;
+    // 本文がスクロールした・最初に上へ動かした（本文を読み進めたい）ときは、なでて閉じる操作をやめる
+    if (bodyRef.current.scrollTop > 0 || !d.dy && e.touches[0].clientY < d.y) {
+      dragRef.current = null;
+      setDragY(0);
+      return;
+    }
+    onDragMove(e);
   };
   const onDragEnd = () => {
     const d = dragRef.current;
     dragRef.current = null;
     if (!d) return;
-    const fast = dragY / Math.max(1, Date.now() - d.t) > 0.6;
+    // 動かした距離は ref から読む（最後の描き直しを待たずに判定できるように）
+    const dy = d.dy;
+    const fast = dy / Math.max(1, Date.now() - d.t) > 0.6;
     // 編集中・保存中は閉じない（書きかけの修正を失わないように）
-    if ((dragY > 120 || fast && dragY > 30) && !editing && !saving) {
+    if ((dy > 120 || fast && dy > 30) && !editing && !saving) {
       setDragY(window.innerHeight);
       setTimeout(onClose, 180);
     } else {
@@ -1570,8 +1592,15 @@ function SummaryModal({
     size: 14,
     color: C.text2
   }))))), /*#__PURE__*/React.createElement("div", {
+    ref: bodyRef,
+    onTouchStart: onBodyTouchStart,
+    onTouchMove: onBodyTouchMove,
+    onTouchEnd: onDragEnd,
+    onTouchCancel: onDragEnd,
     style: {
       overflowY: "auto",
+      // いちばん上で下へ引っぱったときに本文が弾まないようにする（その分、画面ごと下へ動く）
+      overscrollBehaviorY: "none",
       padding: showSecs && secs.length > 0 || msg ? "4px 18px 24px" : "4px 18px calc(24px + env(safe-area-inset-bottom))",
       flex: 1,
       borderTop: `1px solid ${C.sep}`
