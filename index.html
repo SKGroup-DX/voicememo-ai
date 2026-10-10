@@ -398,6 +398,8 @@ const LIGHT_COLORS = {
   green: "#34C759",
   // 文字に使う緑（明るい緑は白地で読みにくいため濃くしている）
   greenText: "#248A3D",
+  // 白い文字をのせる緑のボタン
+  greenFill: "#248A3D",
   orange: "#FF9500"
 };
 const DARK_COLORS = {
@@ -411,6 +413,7 @@ const DARK_COLORS = {
   blue: "#0A84FF",
   green: "#30D158",
   greenText: "#30D158",
+  greenFill: "#248A3D",
   orange: "#FF9F0A"
 };
 const darkQuery = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
@@ -1211,6 +1214,13 @@ function SummaryModal({
     const opening = !transcriptOpen;
     setTranscriptOpen(opening);
     if (!opening || transcript || transcriptState === "loading") return;
+    // 送っている途中・送信待ちの記録は、まだGASに無いので端末に保存してある本文を出す
+    const local = outboxGet().find(x => x.id === item.id);
+    if (local) {
+      setTranscript(local.transcript);
+      setTranscriptState("idle");
+      return;
+    }
     setTranscriptState("loading");
     try {
       const res = await gasPost({
@@ -1795,7 +1805,7 @@ function SummaryModal({
       WebkitUserSelect: "text",
       userSelect: "text"
     }
-  }, transcript || (transcriptState === "error" ? "読み込めませんでした。閉じてもう一度開いてください。" : transcriptState === "empty" ? "保存期間を過ぎたため、文字起こしは削除されています（要約は残っています）。" : "読み込み中…"))), onDelete && !editing && /*#__PURE__*/React.createElement("div", {
+  }, transcript || (transcriptState === "error" ? "読み込めませんでした。閉じてもう一度開いてください。" : transcriptState === "empty" ? "保存期間を過ぎたため、文字起こしは削除されています（要約は残っています）。" : "読み込み中…"))), onDelete && !editing && item.status !== "sending" && /*#__PURE__*/React.createElement("div", {
     style: {
       ...divider,
       textAlign: "center",
@@ -1899,6 +1909,27 @@ function useOnResume(callback, minHiddenMs = 0) {
     return () => document.removeEventListener("visibilitychange", on);
   }, [minHiddenMs]);
 }
+// ホームと履歴はそれぞれ別に一覧を持っている（ホームは隠れている間も残っている）。片方での
+// 削除・編集・要約し直しをもう片方にも伝え、古い内容で端末の保存を上書きしないようにする。
+const RECORD_EVENT = "vm-record-change";
+function notifyRecordChange(detail) {
+  window.dispatchEvent(new CustomEvent(RECORD_EVENT, {
+    detail
+  }));
+}
+function useRecordChanges(setList) {
+  useEffect(() => {
+    const on = e => {
+      const d = e.detail || {};
+      setList(prev => d.type === "deleted" ? prev.filter(r => r.id !== d.id) : prev.map(r => r.id === d.id ? {
+        ...r,
+        ...d.patch
+      } : r));
+    };
+    window.addEventListener(RECORD_EVENT, on);
+    return () => window.removeEventListener(RECORD_EVENT, on);
+  }, [setList]);
+}
 // 要約待ちに戻した記録の要約を、定期実行を待たずにその場で始めてもらう（ホームの「要約する」と
 // 同じ）。応答が届かなくても定期実行が拾い、結果は状況確認でも反映される。
 function kickProcess(id, setList) {
@@ -1916,7 +1947,9 @@ function kickProcess(id, setList) {
     }
   }).catch(() => {});
 }
-function useStatusPolling(list, setList) {
+// enabled が false の間（ホームが隠れている間）は確認しない。戻り値は、約10分で確認を
+// 打ち切った（まだ要約中の記録が残っている）かどうか。
+function useStatusPolling(list, setList, enabled = true) {
   const pendingIds = list.filter(r => ["queued", "processing"].includes(r.status)).map(r => r.id).join(",");
   const [tick, setTick] = useState(0);
   const countRef = useRef(0);
@@ -1930,7 +1963,7 @@ function useStatusPolling(list, setList) {
     const prev = new Set(prevIdsRef.current.split(",").filter(Boolean));
     if (pendingIds.split(",").some(id => id && !prev.has(id))) countRef.current = 0;
     prevIdsRef.current = pendingIds;
-    if (!pendingIds || countRef.current >= POLL_MAX_COUNT) return;
+    if (!enabled || !pendingIds || countRef.current >= POLL_MAX_COUNT) return;
     const t = setTimeout(async () => {
       countRef.current += 1;
       const ids = pendingIds.split(",");
@@ -1969,7 +2002,8 @@ function useStatusPolling(list, setList) {
       setTick(n => n + 1);
     }, POLL_INTERVAL_MS);
     return () => clearTimeout(t);
-  }, [pendingIds, tick]);
+  }, [pendingIds, tick, enabled]);
+  return !!pendingIds && countRef.current >= POLL_MAX_COUNT;
 }
 // ── 電波がないときの送信待ち ──
 // 送れなかった文字起こしは端末に保存しておき、通信できるようになったら自動で送る
@@ -2051,10 +2085,12 @@ function uniqueNames(names) {
 // 「要約する」を押した後の案内。受け付け直後は「要約しています」、終わったら
 // 「要約ができました」と［要約を見る］に切り替える（以前は「受け付けました」のまま
 // 変わらず、要約が終わったのか分かりにくかった）。
-function SubmitProgress({ rec, onOpen, onShowHistory, onClose }) {
+function SubmitProgress({ rec, stalled, onOpen, onShowHistory, onClose }) {
   const done = rec.status === "done";
   const failed = rec.status === "error";
   const sending = rec.status === "sending";
+  // 約10分たっても要約が終わらず、状況確認を打ち切ったとき
+  const stuck = !!stalled && !done && !failed && !sending;
   // 送るのに10秒以上かかっているときは、待っていることを知らせる
   const [slow, setSlow] = useState(false);
   useEffect(() => {
@@ -2073,7 +2109,7 @@ function SubmitProgress({ rec, onOpen, onShowHistory, onClose }) {
       marginTop: 10,
       borderRadius: 12,
       border: "none",
-      background: color,
+      background: done ? C.greenFill : color,
       color: "#fff",
       fontSize: 16,
       fontWeight: 600,
@@ -2105,10 +2141,10 @@ function SubmitProgress({ rec, onOpen, onShowHistory, onClose }) {
       gap: 8
     }
   }, /*#__PURE__*/React.createElement(Ic, {
-    n: done ? "circle-check" : failed ? "circle-exclamation" : "spinner",
+    n: done ? "circle-check" : failed ? "circle-exclamation" : stuck ? "clock-rotate-left" : "spinner",
     size: 15,
     color: color,
-    cls: done || failed ? "" : "spin",
+    cls: done || failed || stuck ? "" : "spin",
     style: {
       marginTop: 2
     }
@@ -2123,7 +2159,14 @@ function SubmitProgress({ rec, onOpen, onShowHistory, onClose }) {
       fontWeight: 600,
       lineHeight: 1.5
     }
-  }, done ? "要約ができました" : failed ? "要約できませんでした" : sending ? "送っています…" : "受け付けました。要約しています…"), sending && slow && /*#__PURE__*/React.createElement("p", {
+  }, done ? "要約ができました" : failed ? "要約できませんでした" : sending ? "送っています…" : stuck ? "要約に時間がかかっています" : "受け付けました。要約しています…"), stuck && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.text2,
+      lineHeight: 1.6,
+      marginTop: 2
+    }
+  }, "閉じても要約は続きます。結果は履歴で確認できます"), sending && slow && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       color: C.text2,
@@ -2137,7 +2180,7 @@ function SubmitProgress({ rec, onOpen, onShowHistory, onClose }) {
       lineHeight: 1.6,
       marginTop: 2
     }
-  }, rec.processError || "時間をおいて再試行してください。")), (done || failed) && /*#__PURE__*/React.createElement("button", {
+  }, rec.processError || "時間をおいて再試行してください。")), (done || failed || stuck) && /*#__PURE__*/React.createElement("button", {
     onClick: onClose,
     "aria-label": "案内を閉じる",
     style: {
@@ -2151,7 +2194,7 @@ function SubmitProgress({ rec, onOpen, onShowHistory, onClose }) {
     n: "xmark",
     size: 13,
     color: C.text2
-  }))), done && actionBtn("要約を見る", onOpen), failed && actionBtn("履歴で再試行", onShowHistory));
+  }))), done && actionBtn("要約を見る", onOpen), failed && actionBtn("履歴で再試行", onShowHistory), stuck && actionBtn("履歴で確認", onShowHistory));
 }
 // ホームは別の画面に移っても消さずに残す（active=false の間は隠すだけ）。以前は画面を
 // 移ると、貼り付けた本文・送信中の状態・進み具合の案内が消え、送信の失敗にも気づけず、
@@ -2171,6 +2214,9 @@ function HomeScreen({ member, active, onShowHistory }) {
   const [recentRecs, setRecentRecs] = useState(() => (cachedRef.current || []).slice(0, HOME_RECENT_COUNT));
   const [nameCandidates, setNameCandidates] = useState(() => uniqueNames((cachedRef.current || []).map(r => r.interviewee)));
   const [transcript, setTranscript] = useState("");
+  // 送る処理の途中で、入力欄に本文があるかを確かめるため（入力中の本文を上書きしないように）
+  const transcriptRef = useRef("");
+  transcriptRef.current = transcript;
   const [interviewee, setInterviewee] = useState("");
   // 貼り付けボタンが使えなかったとき、手で貼り付ける欄を出す
   const [manualMode, setManualMode] = useState(false);
@@ -2227,7 +2273,9 @@ function HomeScreen({ member, active, onShowHistory }) {
     const added = recs.filter(r => !known.has(r.id));
     histCacheSet(member, [...added, ...c.records.map(r => byId.get(r.id) || r)], (c.total || 0) + added.length);
   }, [recentRecs]);
-  useStatusPolling(recentRecs, setRecentRecs);
+  // ホームが隠れている間は確認しない（履歴の画面が同じ記録を確認するため）
+  const pollStalled = useStatusPolling(recentRecs, setRecentRecs, active);
+  useRecordChanges(setRecentRecs);
   // 1件を送る。startSummary: 受け付けと同時に、本文付きで要約開始も送る（GASは保存を待たずに
   // AIを呼べる）。結果は { result: "accepted"（受け付けられた）| "rejected"（断られた。送り直しても
   // 同じ）| "failed"（通信できなかった。後で送り直す）, error }。受け付けられたら送信待ちから外す。
@@ -2269,7 +2317,7 @@ function HomeScreen({ member, active, onShowHistory }) {
             if (processGaveUp) reject(e);
           });
           if (processP) processP.then(r => {
-            if (r && r.success && r.status && r.status !== "skipped") resolve({
+            if (r && r.success && (r.status === "done" || r.status === "error")) resolve({
               success: true
             });else {
               processGaveUp = true;
@@ -2292,7 +2340,7 @@ function HomeScreen({ member, active, onShowHistory }) {
         };
       }
       if (!res.success) return {
-        result: "rejected",
+        result: res.invalid ? "rejected" : "failed",
         error: res.error
       };
       const rest = outboxGet().filter(x => x.id !== it.id);
@@ -2305,8 +2353,23 @@ function HomeScreen({ member, active, onShowHistory }) {
       inFlightRef.current.delete(it.id);
     }
   };
-  // 送れなかった記録を送信待ちから外し、本文を入力欄に戻して知らせる
+  // 送れなかった記録を送信待ちから外し、本文を入力欄に戻して知らせる。入力欄に別の本文が
+  // あるときは上書きせず、送信待ちに残す（印を付けて自動では送らない。入力欄を空にしてから
+  // ［今すぐ送る］を押すと戻す）。本文はどの場合も消さない。
   const giveBack = (it, message) => {
+    if (transcriptRef.current.trim()) {
+      const items = outboxGet().map(x => x.id === it.id ? {
+        ...x,
+        invalid: message
+      } : x);
+      outboxSet(items);
+      setOutbox(items);
+      markWaiting(it.id);
+      setError(message + "（送信待ちに残しています。入力欄を空にしてから［今すぐ送る］を押すと、入力欄に戻します）");
+      return;
+    }
+    // 同じ回の続きで次の記録を戻すとき、この本文を上書きしないように
+    transcriptRef.current = it.transcript;
     const rest = outboxGet().filter(x => x.id !== it.id);
     outboxSet(rest);
     setOutbox(rest);
@@ -2314,7 +2377,7 @@ function HomeScreen({ member, active, onShowHistory }) {
     setRecentRecs(prev => prev.filter(r => r.id !== it.id));
     setNoticeId(n => n === it.id ? null : n);
     setError(message + "（本文を入力欄に戻しました）");
-    setTranscript(t => t.trim() ? t : it.transcript);
+    setTranscript(it.transcript);
     setInterviewee(v => v.trim() ? v : it.interviewee || "");
     setManualMode(true);
   };
@@ -2331,6 +2394,11 @@ function HomeScreen({ member, active, onShowHistory }) {
     setFlushing(true);
     for (const it of outboxGet()) {
       if (inFlightRef.current.has(it.id)) continue;
+      // 断られた記録は送らない（入力欄が空なら戻す）
+      if (it.invalid) {
+        if (!transcriptRef.current.trim()) giveBack(it, it.invalid);
+        continue;
+      }
       const r = await sendOne(it, false);
       if (r.result === "failed") break;
       if (r.result === "rejected") {
@@ -2700,6 +2768,7 @@ function HomeScreen({ member, active, onShowHistory }) {
     }
   }, "今すぐ送る")), noticeRec && /*#__PURE__*/React.createElement(SubmitProgress, {
     rec: noticeRec,
+    stalled: pollStalled,
     onOpen: () => setSelectedRec(noticeRec),
     onShowHistory: onShowHistory,
     onClose: () => setNoticeId(null)
@@ -2834,11 +2903,14 @@ function HomeScreen({ member, active, onShowHistory }) {
       setDelTarget(item);
     },
     onRequeued: id => {
-      setRecentRecs(prev => prev.map(r => r.id === id ? {
-        ...r,
-        status: "queued",
-        processError: ""
-      } : r));
+      notifyRecordChange({
+        type: "updated",
+        id,
+        patch: {
+          status: "queued",
+          processError: ""
+        }
+      });
       kickProcess(id, setRecentRecs);
     },
     onSaved: secs => {
@@ -2847,10 +2919,13 @@ function HomeScreen({ member, active, onShowHistory }) {
         ...s,
         sections: secs
       } : s);
-      setRecentRecs(rs => rs.map(r => r.id === selectedRec.id ? {
-        ...r,
-        sections: secs
-      } : r));
+      notifyRecordChange({
+        type: "updated",
+        id: selectedRec.id,
+        patch: {
+          sections: secs
+        }
+      });
     }
   }), delTarget && /*#__PURE__*/React.createElement(DeleteConfirm, {
     target: delTarget,
@@ -2858,7 +2933,10 @@ function HomeScreen({ member, active, onShowHistory }) {
     onDeleted: id => {
       lastSentForget(id); // 削除した記録は、同じ内容をもう一度送れるようにする
       setDelTarget(null);
-      setRecentRecs(prev => prev.filter(r => r.id !== id));
+      notifyRecordChange({
+        type: "deleted",
+        id
+      });
       if (noticeId === id) setNoticeId(null);
       const c = histCacheGet(member);
       if (c) histCacheSet(member, c.records.filter(r => r.id !== id), Math.max(0, (c.total || 1) - 1));
@@ -3445,14 +3523,18 @@ function HistoryScreen({
     return () => ob.disconnect();
   }, [hasMore, moreLoading, moreError, searchQ, typeFilter]);
   useStatusPolling(records, setRecords);
+  useRecordChanges(setRecords);
   // 5分以上離れてから戻ってきたら、一覧を取り直す（ほかの端末での変更や要約の完了を反映）
   useOnResume(() => fetchFirst(), 5 * 60 * 1000);
   const markRequeued = id => {
-    setRecords(prev => prev.map(r => r.id === id ? {
-      ...r,
-      status: "queued",
-      processError: ""
-    } : r));
+    notifyRecordChange({
+      type: "updated",
+      id,
+      patch: {
+        status: "queued",
+        processError: ""
+      }
+    });
     kickProcess(id, setRecords);
   };
   const doRetry = async item => {
@@ -3683,7 +3765,7 @@ function HistoryScreen({
     style: {
       height: 58,
       borderTop: i > 1 ? `1px solid ${C.sep}` : "none",
-      background: `linear-gradient(90deg,${C.surface} 25%,rgba(0,0,0,.04) 50%,${C.surface} 75%)`,
+      background: `linear-gradient(90deg,${C.surface} 25%,${C.text}0A 50%,${C.surface} 75%)`,
       backgroundSize: "400px 100%",
       animation: "shimmer 1.4s ease-in-out infinite"
     }
@@ -3830,7 +3912,10 @@ function HistoryScreen({
     onCancel: () => setDelTarget(null),
     onDeleted: id => {
       lastSentForget(id); // 削除した記録は、同じ内容をもう一度送れるようにする
-      setRecords(prev => prev.filter(r => r.id !== id));
+      notifyRecordChange({
+        type: "deleted",
+        id
+      });
       setTotal(t => Math.max(0, t - 1));
       setDelTarget(null);
     }
@@ -3849,10 +3934,13 @@ function HistoryScreen({
         ...s,
         sections: secs
       } : s);
-      setRecords(rs => rs.map(r => r.id === selected.id ? {
-        ...r,
-        sections: secs
-      } : r));
+      notifyRecordChange({
+        type: "updated",
+        id: selected.id,
+        patch: {
+          sections: secs
+        }
+      });
     }
   }));
 }
@@ -4034,7 +4122,8 @@ function App() {
   }, "更新する")), showOfflineBanner && /*#__PURE__*/React.createElement("div", {
     style: {
       flexShrink: 0,
-      background: C.orange,
+      background: `${C.orange}22`,
+      borderBottom: `1px solid ${C.orange}50`,
       padding: "8px 16px",
       display: "flex",
       alignItems: "center",
@@ -4050,11 +4139,11 @@ function App() {
   }, /*#__PURE__*/React.createElement(Ic, {
     n: "wifi-slash",
     size: 14,
-    color: "#fff"
+    color: C.orange
   }), /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 13,
-      color: "#fff",
+      color: C.text,
       fontWeight: 500
     }
   }, "オフラインです。WiFiまたはモバイルデータを確認してください。")), /*#__PURE__*/React.createElement("button", {
@@ -4064,12 +4153,13 @@ function App() {
       background: "none",
       border: "none",
       cursor: "pointer",
-      padding: 4
+      padding: 10,
+      margin: -6
     }
   }, /*#__PURE__*/React.createElement(Ic, {
     n: "xmark",
     size: 14,
-    color: "#fff"
+    color: C.text2
   }))), /*#__PURE__*/React.createElement("div", {
     style: {
       flex: 1,

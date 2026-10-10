@@ -290,11 +290,14 @@ function submitTranscript(body) {
   const interviewee = String(body.interviewee || "").trim().slice(0, MAX_INTERVIEWEE_CHARS);
   const transcript  = String(body.transcript || "").trim();
 
-  if (!member) return { success: false, error: "member required" };
-  if (member.length > MAX_MEMBER_CHARS) return { success: false, error: "名前が長すぎます（" + MAX_MEMBER_CHARS + "文字まで）" };
-  if (!transcript) return { success: false, error: "文字起こしテキストがありません" };
+  // 入力の誤りで断るとき（送り直しても同じ結果になる）は invalid を付ける。アプリは invalid の
+  // ときだけ送信待ちから外し、それ以外の失敗（一時的なエラーなど）は後で自動で送り直す。
+  const invalid = error => ({ success: false, invalid: true, error });
+  if (!member) return invalid("member required");
+  if (member.length > MAX_MEMBER_CHARS) return invalid("名前が長すぎます（" + MAX_MEMBER_CHARS + "文字まで）");
+  if (!transcript) return invalid("文字起こしテキストがありません");
   if (transcript.length > MAX_TRANSCRIPT_CHARS) {
-    return { success: false, error: "文字数が上限（" + MAX_TRANSCRIPT_CHARS + "文字）を超えています" };
+    return invalid("文字数が上限（" + MAX_TRANSCRIPT_CHARS + "文字）を超えています");
   }
 
   // 記録の番号はアプリが送ってくる（送り直しても同じ番号）。保存した後に応答だけが
@@ -370,7 +373,11 @@ const WAIT_FOR_SUBMIT_MS = 20 * 1000;
 // 受け付けたばかりの記録は、アプリが本文付きで要約開始を送ってくる（下の processWithTranscript_）。
 // その要約と二重にならないよう、定期実行は「押してからこの時間がたっていない、まだ誰も手を付けて
 // いない記録」を拾わない。要約開始が届かなかった場合は、この時間の後に定期実行が拾う。
-const FRESH_GRACE_MS = 3 * 60 * 1000;
+// その場での要約は、AIに100秒（最後の呼び出しの分を足しても約160秒）、受け付けの保存待ち20秒、
+// ロック待ち30秒で終わるので、それより長くしておく。
+const FRESH_GRACE_MS = 4 * 60 * 1000;
+// その場での要約で、AIの呼び出しをやり直してよい時間（設定を変えてのやり直しも含めて通しで数える）
+const SYNC_AI_BUDGET_MS = 100 * 1000;
 
 function processRecord(body) {
   const id = body.id ? String(body.id) : "";
@@ -393,7 +400,7 @@ function processRecord(body) {
   const waitMs = Date.now() - startedAt;
   const aiStartedAt = Date.now();
   try {
-    const sections = callGeminiSummarize(job.transcript, auth, RETRY_POLICY_SYNC, job.forceType);
+    const sections = callGeminiSummarize(job.transcript, auth, syncPolicy_(), job.forceType);
     console.log("[processRecord] 要約にかかった時間:", ((Date.now() - aiStartedAt) / 1000).toFixed(1), "秒 ／ 文字数:", job.transcript.length, "／ 種別:", sections.meetingType);
     finishJob_(job, { sections, timing: makeTiming_(job.id, "その場", job.transcript.length, startedAt, waitMs, aiStartedAt) });
     return { success: true, id, status: "done", sections };
@@ -415,12 +422,45 @@ function processRecord(body) {
 // すぐAIを呼び、終わってから同じ記録に書き込む（以前は保存とその順番待ちを待ってから呼んでいた）。
 // 受け付けた行は queued のまま（FRESH_GRACE_MS の間は定期実行が拾わない）なので、二重には要約しない。
 // 書き込むのは、行の本文が送られてきた本文と同じで、まだ完了していない場合だけ。
+function syncPolicy_() {
+  return Object.assign({}, RETRY_POLICY_SYNC, { deadline: Date.now() + SYNC_AI_BUDGET_MS });
+}
+
+// 本文付きの要約開始を担当中という目印（同じ記録の要約開始が届き直しても、AIを二重に呼ばない）
+const FAST_MARK_TTL_SEC = 300;
+
 function processWithTranscript_(id, transcript, auth, startedAt) {
+  // 届き直し（アプリの自動の送り直しなど）や、すでに要約が終わっている記録では、AIを呼ばない
+  const cache = CacheService.getScriptCache();
+  const markKey = "fast_" + id;
+  const pre = withLock_(() => {
+    if (cache.get(markKey)) return { status: "inProgress" };
+    const values = readRowById_(id);
+    const status = values ? String(values[COL.STATUS - 1] || "") : "";
+    if (status === "done") return { status: "done", sections: stripTranscript(parseSections(values[COL.SECTIONS - 1])) };
+    if (status === "processing") return { status: "processing" };
+    cache.put(markKey, "1", FAST_MARK_TTL_SEC);
+    return null;
+  }, 10000);
+  if (pre) {
+    console.log("[processRecord] 本文付き id:", id, "AIは呼ばない（" + pre.status + "）");
+    return Object.assign({ success: true, id }, pre);
+  }
+  try {
+    return summarizeWithTranscript_(id, transcript, auth, startedAt);
+  } finally {
+    try {
+      cache.remove(markKey);
+    } catch (e) {}
+  }
+}
+
+function summarizeWithTranscript_(id, transcript, auth, startedAt) {
   const aiStartedAt = Date.now();
   let sections = null;
   let failure = null;
   try {
-    sections = callGeminiSummarize(transcript, auth, RETRY_POLICY_SYNC, "");
+    sections = callGeminiSummarize(transcript, auth, syncPolicy_(), "");
   } catch (e) {
     failure = e;
   }
@@ -465,7 +505,8 @@ function processWithTranscript_(id, transcript, auth, startedAt) {
     }, 30000);
   } catch (e) {
     console.error("[processRecord] 結果を書き込めませんでした id:", id, e.message);
-    return { success: true, id, status: "queued" };
+    // 受け付けが保存されたかどうか分からないので、アプリが「受け付け済み」と思わないようにする
+    return { success: true, id, status: "unknown" };
   }
   console.log("[processRecord] 本文付き id:", id, "（" + outcome.note + "）AI", ((aiEndedAt - aiStartedAt) / 1000).toFixed(1), "秒 ／ 文字数:", transcript.length, failure ? "／ 失敗: " + failure.message : "");
   const res = { success: true, id, status: outcome.status };
